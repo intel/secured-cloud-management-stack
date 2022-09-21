@@ -1,0 +1,1399 @@
+From 8a2a38282ae91e5cda7305b280f89c262cbc1ca0 Mon Sep 17 00:00:00 2001
+From: shaleijie <sha.leijie@99cloud.net>
+Date: Thu, 2 Jun 2022 01:43:22 +0800
+Subject: [PATCH 1/4] add role for DCAP services
+
+Change-Id: Ic32531058a1ec3350f76409d8411bdd47a8204b8
+---
+ ansible/group_vars/all.yml                    |  1 +
+ ansible/roles/dcap/defaults/main.yml          | 74 +++++++++++++++++++
+ ansible/roles/dcap/handlers/main.yml          | 18 +++++
+ ansible/roles/dcap/meta/main.yml              |  3 +
+ ansible/roles/dcap/tasks/bootstrap.yml        | 34 +++++++++
+ .../roles/dcap/tasks/bootstrap_service.yml    | 36 +++++++++
+ ansible/roles/dcap/tasks/config.yml           | 48 ++++++++++++
+ ansible/roles/dcap/tasks/deploy.yml           | 11 +++
+ ansible/roles/dcap/tasks/loadbalancer.yml     |  7 ++
+ ansible/roles/dcap/tasks/main.yml             |  2 +
+ ansible/roles/dcap/tasks/precheck.yml         | 24 ++++++
+ ansible/roles/dcap/tasks/pull.yml             | 11 +++
+ ansible/roles/dcap/tasks/reconfigure.yml      |  2 +
+ ansible/roles/dcap/tasks/stop.yml             | 12 +++
+ ansible/roles/dcap/tasks/upgrade.yml          |  1 +
+ .../roles/dcap/templates/dcap-server.json.j2  | 52 +++++++++++++
+ ansible/site.yml                              | 16 ++++
+ etc/kolla/globals.yml                         |  7 ++
+ etc/kolla/passwords.yml                       |  2 +
+ 19 files changed, 361 insertions(+)
+ create mode 100644 ansible/roles/dcap/defaults/main.yml
+ create mode 100644 ansible/roles/dcap/handlers/main.yml
+ create mode 100644 ansible/roles/dcap/meta/main.yml
+ create mode 100644 ansible/roles/dcap/tasks/bootstrap.yml
+ create mode 100644 ansible/roles/dcap/tasks/bootstrap_service.yml
+ create mode 100644 ansible/roles/dcap/tasks/config.yml
+ create mode 100644 ansible/roles/dcap/tasks/deploy.yml
+ create mode 100644 ansible/roles/dcap/tasks/loadbalancer.yml
+ create mode 100644 ansible/roles/dcap/tasks/main.yml
+ create mode 100644 ansible/roles/dcap/tasks/precheck.yml
+ create mode 100644 ansible/roles/dcap/tasks/pull.yml
+ create mode 100644 ansible/roles/dcap/tasks/reconfigure.yml
+ create mode 100644 ansible/roles/dcap/tasks/stop.yml
+ create mode 100644 ansible/roles/dcap/tasks/upgrade.yml
+ create mode 100644 ansible/roles/dcap/templates/dcap-server.json.j2
+
+diff --git a/ansible/group_vars/all.yml b/ansible/group_vars/all.yml
+index ac3fb236c..d077c851f 100644
+--- a/ansible/group_vars/all.yml
++++ b/ansible/group_vars/all.yml
+@@ -546,6 +546,7 @@ enable_openstack_core: "yes"
+ 
+ # These roles are required for Kolla to be operation, however a savvy deployer
+ # could disable some of these required roles and run their own services.
++enable_dcap: "yes"
+ enable_glance: "{{ enable_openstack_core | bool }}"
+ enable_haproxy: "yes"
+ enable_keepalived: "{{ enable_haproxy | bool }}"
+diff --git a/ansible/roles/dcap/defaults/main.yml b/ansible/roles/dcap/defaults/main.yml
+new file mode 100644
+index 000000000..828019257
+--- /dev/null
++++ b/ansible/roles/dcap/defaults/main.yml
+@@ -0,0 +1,74 @@
++---
++project_name: dcap
++log_dir: /opt/intel/sgx-dcap-pccs/logs
++custom_dcap_server_ssl: false
++
++dcap_services:
++  dcap-server:
++    container_name: dcap_server
++    group: control
++    enabled: true
++    image: "{{ dcap_server_image_full }}"
++    volumes: "{{ dcap_server_volumes + dcap_server_extra_volumes if custom_dcap_server_ssl|bool else dcap_server_volumes }}"
++    haproxy:
++      dcap_server:
++        enabled: "{{ enable_dcap }}"
++        mode: "tcp"
++        external: false
++        port: "{{ dcap_port }}"
++      dcap_server_external:
++        enabled: "{{ enable_dcap }}"
++        mode: "tcp"
++        external: true
++        port: "{{ dcap_port }}"
++  dcap-register:
++    container_name: dcap_register
++    group: compute
++    enabled: true
++    image: "{{ dcap_register_image_full }}"
++    volumes: "{{ dcap_register_volumes }}"
++
++dcap_server_service: "dcap-server"
++dcap_register_service: "dcap-register"
++
++dcap_uri: "https://api.trustedservices.intel.com/sgx/certification/v3/"
++dcap_port: "8081"
++dcap_host: "{{ api_interface_address }}"
++dcap_api_key: ""
++dcap_proxy: ""
++# hash sha512 of dcap_user_password
++dcap_user_password_hash: ""
++# hash sha512 of dcap_admin_password
++dcap_admin_password_hash: ""
++dcap_cache_fill_mode: "LAZY"
++dcap_log_level: "info"
++
++dcap_database_type: "mysql"
++dcap_database_username: "dcap"
++dcap_database_host: "{{ database_address }}"
++dcap_database_name: "pckcache"
++custom_dcap_namespace: "custom"
++
++dcap_server_image_name: "dcap-server"
++dcap_server_image_tag: "latest"
++dcap_server_image_full: "{{ docker_registry ~ '/' if docker_registry else '' }}{{ custom_dcap_namespace }}/{{ dcap_server_image_name }}:{{ dcap_server_image_tag }}"
++
++dcap_register_image_name: "dcap-register"
++dcap_register_image_tag: "latest"
++dcap_register_image_full: "{{ docker_registry ~ '/' if docker_registry else '' }}{{ custom_dcap_namespace }}/{{ dcap_register_image_name }}:{{ dcap_register_image_tag }}"
++
++dcap_server_volumes:
++  - "kolla_logs:{{ log_dir }}"
++  - "/etc/localtime:/etc/localtime:ro"
++  - "{{ node_config_directory }}/{{ dcap_server_service }}/dcap-server.json:/opt/intel/sgx-dcap-pccs/config/default.json"
++
++dcap_server_extra_volumes:
++  - "{{ node_config_directory }}/{{ dcap_server_service }}/csr.pem:/opt/intel/sgx-dcap-pccs/ssl_key/csr.pem"
++  - "{{ node_config_directory }}/{{ dcap_server_service }}/file.crt:/opt/intel/sgx-dcap-pccs/ssl_key/file.crt"
++  - "{{ node_config_directory }}/{{ dcap_server_service }}/private.pem:/opt/intel/sgx-dcap-pccs/ssl_key/private.pem"
++
++dcap_register_volumes:
++  - "/etc/localtime:/etc/localtime:ro"
++  - "/lib/modules:/lib/modules:ro"
++  - "/dev:/dev:rw"
++  - "/sys/firmware:/sys/firmware:ro"
+diff --git a/ansible/roles/dcap/handlers/main.yml b/ansible/roles/dcap/handlers/main.yml
+new file mode 100644
+index 000000000..e1777e99e
+--- /dev/null
++++ b/ansible/roles/dcap/handlers/main.yml
+@@ -0,0 +1,18 @@
++---
++- name: Restart dcap-server container
++  vars:
++    service_name: "{{ dcap_server_service }}"
++    service: "{{ dcap_services[service_name] }}"
++  become: true
++  docker_container:
++    name: "{{ service.container_name }}"
++    image: "{{ service.image }}"
++    state: started
++    restart: yes
++    restart_policy: unless-stopped
++    network_mode: host
++    command: "dcap-server"
++    volumes: "{{ service.volumes }}"
++  when:
++    - inventory_hostname in groups[service.group]
++    - service.enabled | bool
+diff --git a/ansible/roles/dcap/meta/main.yml b/ansible/roles/dcap/meta/main.yml
+new file mode 100644
+index 000000000..6b4fff8fe
+--- /dev/null
++++ b/ansible/roles/dcap/meta/main.yml
+@@ -0,0 +1,3 @@
++---
++dependencies:
++  - { role: common }
+diff --git a/ansible/roles/dcap/tasks/bootstrap.yml b/ansible/roles/dcap/tasks/bootstrap.yml
+new file mode 100644
+index 000000000..b0a86e54c
+--- /dev/null
++++ b/ansible/roles/dcap/tasks/bootstrap.yml
+@@ -0,0 +1,34 @@
++---
++- name: Creating dcap database
++  become: true
++  kolla_toolbox:
++    module_name: mysql_db
++    module_args:
++      login_host: "{{ database_address }}"
++      login_port: "{{ database_port }}"
++      login_user: "{{ database_user }}"
++      login_password: "{{ database_password }}"
++      name: "{{ dcap_database_name }}"
++  run_once: True
++  delegate_to: "{{ groups['control'][0] }}"
++
++- name: Creating dcap database user and setting permissions
++  become: true
++  kolla_toolbox:
++    module_name: mysql_user
++    module_args:
++      login_host: "{{ database_address }}"
++      login_port: "{{ database_port }}"
++      login_user: "{{ database_user }}"
++      login_password: "{{ database_password }}"
++      name: "{{ dcap_database_username }}"
++      password: "{{ dcap_database_password }}"
++      host: "%"
++      priv: "{{ dcap_database_name }}.*:ALL"
++      append_privs: "yes"
++  run_once: True
++  delegate_to: "{{ groups['control'][0] }}"
++  when:
++    - not use_preconfigured_databases | bool
++
++- include_tasks: bootstrap_service.yml
+diff --git a/ansible/roles/dcap/tasks/bootstrap_service.yml b/ansible/roles/dcap/tasks/bootstrap_service.yml
+new file mode 100644
+index 000000000..1758b5725
+--- /dev/null
++++ b/ansible/roles/dcap/tasks/bootstrap_service.yml
+@@ -0,0 +1,36 @@
++---
++- name: Running dcap register container
++  vars:
++    service_name: "{{ dcap_register_service }}"
++    service: "{{ dcap_services[service_name] }}"
++  become: true
++  docker_container:
++    name: "{{ service.container_name }}"
++    image: "{{ service.image }}"
++    state: started
++    auto_remove: yes
++    restart_policy: no
++    network_mode: host
++    command: "dcap-register"
++    volumes: "{{ service.volumes }}"
++  when:
++    - inventory_hostname in groups[service.group]
++    - service.enabled | bool
++    - hostvars[inventory_hostname].enable_sgx | default(false) | bool
++
++- name: Validating if the registration is complete
++  vars:
++    service_name: "{{ dcap_register_service }}"
++    service: "{{ dcap_services[service_name] }}"
++  become: true
++  docker_container_info:
++    name: "{{ service.container_name }}"
++  register: dcap_register_info
++  until:
++    - dcap_register_info.container is none or dcap_register_info.container.State.Status == "exited"
++  retries: 10
++  delay: 6
++  when:
++    - inventory_hostname in groups[service.group]
++    - service.enabled | bool
++    - hostvars[inventory_hostname].enable_sgx | default(false) | bool
+diff --git a/ansible/roles/dcap/tasks/config.yml b/ansible/roles/dcap/tasks/config.yml
+new file mode 100644
+index 000000000..312b4d29c
+--- /dev/null
++++ b/ansible/roles/dcap/tasks/config.yml
+@@ -0,0 +1,48 @@
++---
++- name: Ensuring config directories exist
++  file:
++    path: "{{ node_config_directory }}/{{ item.key }}"
++    state: "directory"
++    owner: "{{ config_owner_user }}"
++    group: "{{ config_owner_group }}"
++    mode: "0770"
++  become: true
++  when:
++    - inventory_hostname in groups[item.value.group]
++    - item.value.enabled | bool
++  with_dict: "{{ dcap_services }}"
++
++- name: Copying over dcap-server.json
++  vars:
++    service_name: "{{ dcap_server_service }}"
++    service: "{{ dcap_services[service_name] }}"
++  template:
++    src: "dcap-server.json.j2"
++    dest: "{{ node_config_directory }}/{{ service_name }}/dcap-server.json"
++    mode: "0660"
++  become: true
++  when:
++    - inventory_hostname in groups[service.group]
++    - service.enabled | bool
++  notify:
++    - "Restart {{ service_name }} container"
++
++- name: Copying over custom ssl files
++  vars:
++    service_name: "{{ dcap_server_service }}"
++    service: "{{ dcap_services[service_name] }}"
++  copy:
++    src: "{{ node_custom_config }}/{{ service_name }}/{{ item }}"
++    dest: "{{ node_config_directory }}/{{ service_name }}/{{ item }}"
++    mode: "0660"
++  become: true
++  when:
++    - inventory_hostname in groups[service.group]
++    - service.enabled | bool
++    - custom_dcap_server_ssl | bool
++  with_items:
++    - "csr.pem"
++    - "file.crt"
++    - "private.pem"
++  notify:
++    - "Restart {{ service_name }} container"
+diff --git a/ansible/roles/dcap/tasks/deploy.yml b/ansible/roles/dcap/tasks/deploy.yml
+new file mode 100644
+index 000000000..4f6eaa6db
+--- /dev/null
++++ b/ansible/roles/dcap/tasks/deploy.yml
+@@ -0,0 +1,11 @@
++---
++- include: precheck.yml
++
++- include: pull.yml
++
++- include: config.yml
++
++- include: bootstrap.yml
++
++- name: Flush handlers
++  meta: flush_handlers
+diff --git a/ansible/roles/dcap/tasks/loadbalancer.yml b/ansible/roles/dcap/tasks/loadbalancer.yml
+new file mode 100644
+index 000000000..043207f09
+--- /dev/null
++++ b/ansible/roles/dcap/tasks/loadbalancer.yml
+@@ -0,0 +1,7 @@
++---
++- name: "Configure haproxy for {{ project_name }}"
++  import_role:
++    role: haproxy-config
++  vars:
++    project_services: "{{ dcap_services }}"
++  tags: always
+diff --git a/ansible/roles/dcap/tasks/main.yml b/ansible/roles/dcap/tasks/main.yml
+new file mode 100644
+index 000000000..bc5d1e625
+--- /dev/null
++++ b/ansible/roles/dcap/tasks/main.yml
+@@ -0,0 +1,2 @@
++---
++- include_tasks: "{{ kolla_action }}.yml"
+diff --git a/ansible/roles/dcap/tasks/precheck.yml b/ansible/roles/dcap/tasks/precheck.yml
+new file mode 100644
+index 000000000..7043bb265
+--- /dev/null
++++ b/ansible/roles/dcap/tasks/precheck.yml
+@@ -0,0 +1,24 @@
++---
++- name: Get container facts
++  vars:
++    service_name: "{{ dcap_server_service }}"
++    service: "{{ dcap_services[service_name] }}"
++  become: true
++  kolla_container_facts:
++    name:
++      - "{{ service.container_name }}"
++  register: container_facts
++
++- name: Checking free port for dcap-server
++  vars:
++    service_name: "{{ dcap_server_service }}"
++    service: "{{ dcap_services[service_name] }}"
++  wait_for:
++    host: "{{ api_interface_address }}"
++    port: "{{ dcap_port }}"
++    connect_timeout: 1
++    timeout: 1
++    state: stopped
++  when:
++    - container_facts[service.container_name] is not defined
++    - inventory_hostname in groups[service.group]
+diff --git a/ansible/roles/dcap/tasks/pull.yml b/ansible/roles/dcap/tasks/pull.yml
+new file mode 100644
+index 000000000..22912d3d5
+--- /dev/null
++++ b/ansible/roles/dcap/tasks/pull.yml
+@@ -0,0 +1,11 @@
++---
++- name: Pulling dcap images
++  become: true
++  kolla_docker:
++    action: "pull_image"
++    common_options: "{{ docker_common_options }}"
++    image: "{{ item.value.image }}"
++  when:
++    - inventory_hostname in groups[item.value.group]
++    - item.value.enabled | bool
++  with_dict: "{{ dcap_services }}"
+diff --git a/ansible/roles/dcap/tasks/reconfigure.yml b/ansible/roles/dcap/tasks/reconfigure.yml
+new file mode 100644
+index 000000000..f670a5b78
+--- /dev/null
++++ b/ansible/roles/dcap/tasks/reconfigure.yml
+@@ -0,0 +1,2 @@
++---
++- include_tasks: deploy.yml
+diff --git a/ansible/roles/dcap/tasks/stop.yml b/ansible/roles/dcap/tasks/stop.yml
+new file mode 100644
+index 000000000..c6732b6ae
+--- /dev/null
++++ b/ansible/roles/dcap/tasks/stop.yml
+@@ -0,0 +1,12 @@
++---
++- name: "Stopping dcap server containers"
++  vars:
++    service_name: "{{ dcap_server_service }}"
++    service: "{{ dcap_services[service_name] }}"
++  docker_container:
++    name: "{{ service.container_name }}"
++    state: stopped
++  when:
++    - service.enabled | bool
++    - service.container_name not in skip_stop_containers
++    - inventory_hostname in groups[service.group]
+diff --git a/ansible/roles/dcap/tasks/upgrade.yml b/ansible/roles/dcap/tasks/upgrade.yml
+new file mode 100644
+index 000000000..ed97d539c
+--- /dev/null
++++ b/ansible/roles/dcap/tasks/upgrade.yml
+@@ -0,0 +1 @@
++---
+diff --git a/ansible/roles/dcap/templates/dcap-server.json.j2 b/ansible/roles/dcap/templates/dcap-server.json.j2
+new file mode 100644
+index 000000000..fd9a5d11e
+--- /dev/null
++++ b/ansible/roles/dcap/templates/dcap-server.json.j2
+@@ -0,0 +1,52 @@
++{
++    "HTTPS_PORT" : {{ dcap_port }},
++    "hosts" : "{{ dcap_host }}",
++    "uri": "{{ dcap_uri }}",
++    "ApiKey" : "{{ dcap_api_key }}",
++    "proxy" : "{{ dcap_proxy }}",
++    "RefreshSchedule": "0 0 1 * * *",
++    "UserTokenHash" : "{{ dcap_user_password_hash }}",
++    "AdminTokenHash" : "{{ dcap_admin_password_hash }}",
++    "CachingFillMode" : "{{ dcap_cache_fill_mode }}",
++    "LogLevel" : "{{ dcap_log_level }}",
++    "DB_CONFIG" : "{{ dcap_database_type }}",
++    "sqlite" : {
++        "database" : "database",
++        "username" : "{{ dcap_database_username }}",
++        "password" : "{{ dcap_database_password }}",
++        "options" : {
++            "host": "localhost",
++            "dialect": "sqlite",
++            "pool": {
++                "max": 5,
++                "min": 0,
++                "acquire": 30000,
++                "idle": 10000
++            },
++            "define": {
++                "freezeTableName": true
++            },
++            "logging" : false,
++            "storage": "pckcache.db"
++        }
++    },
++    "mysql" : {
++        "database" : "{{ dcap_database_name }}",
++        "username" : "{{ dcap_database_username }}",
++        "password" : "{{ dcap_database_password }}",
++        "options" : {
++            "host": "{{ dcap_database_host }}",
++            "dialect": "mysql",
++            "pool": {
++                "max": 5,
++                "min": 0,
++                "acquire": 30000,
++                "idle": 10000
++            },
++            "define": {
++                "freezeTableName": true
++            },
++            "logging" : false
++        }
++    }
++}
+diff --git a/ansible/site.yml b/ansible/site.yml
+index ffd32c370..395e52f00 100644
+--- a/ansible/site.yml
++++ b/ansible/site.yml
+@@ -163,6 +163,11 @@
+             tasks_from: loadbalancer
+           tags: cyborg
+           when: enable_cyborg | bool
++        - include_role:
++            role: dcap
++            tasks_from: loadbalancer
++          tags: dcap
++          when: enable_dcap | bool
+         - include_role:
+             role: designate
+             tasks_from: loadbalancer
+@@ -590,6 +595,17 @@
+         tags: etcd,
+         when: enable_etcd | bool }
+ 
++- name: Apply role dcap
++  gather_facts: false
++  hosts:
++    - control
++    - compute
++  serial: '{{ kolla_serial|default("0") }}'
++  roles:
++    - { role: dcap,
++        tags: dcap,
++        when: enable_dcap | bool }
++
+ - name: Apply role keystone
+   gather_facts: false
+   hosts:
+diff --git a/etc/kolla/globals.yml b/etc/kolla/globals.yml
+index 15dbac66f..9449a8129 100644
+--- a/etc/kolla/globals.yml
++++ b/etc/kolla/globals.yml
+@@ -663,3 +663,10 @@
+ # Configure telegraf to use the docker daemon itself as an input for
+ # telemetry data.
+ #telegraf_enable_docker_input: "no"
++
++######
++# DCAP
++######
++# dcap_api_key:
++# dcap_user_password_hash:
++# dcap_admin_password_hash:
+diff --git a/etc/kolla/passwords.yml b/etc/kolla/passwords.yml
+index 65d9e7b4f..46017f4f2 100644
+--- a/etc/kolla/passwords.yml
++++ b/etc/kolla/passwords.yml
+@@ -66,6 +66,8 @@ barbican_crypto_key:
+ blazar_database_password:
+ blazar_keystone_password:
+ 
++dcap_database_password:
++
+ keystone_admin_password:
+ keystone_database_password:
+ 
+-- 
+2.17.1
+
+
+From ad87617b25313a3a1f6d0f735f5351730c8059a1 Mon Sep 17 00:00:00 2001
+From: shaleijie <sha.leijie@99cloud.net>
+Date: Wed, 22 Jun 2022 18:53:50 +0800
+Subject: [PATCH 2/4] add role for Skyline services
+
+Change-Id: I7ba5f5dfbbb405fb7dee3d58f7c9228e0b7a824c
+---
+ ansible/group_vars/all.yml                    |   2 +
+ ansible/roles/skyline/defaults/main.yml       |  46 +++++++
+ ansible/roles/skyline/handlers/main.yml       |  21 ++++
+ ansible/roles/skyline/tasks/bootstrap.yml     |  18 +++
+ .../roles/skyline/tasks/bootstrap_service.yml |  22 ++++
+ ansible/roles/skyline/tasks/check.yml         |   1 +
+ ansible/roles/skyline/tasks/config.yml        |  69 +++++++++++
+ ansible/roles/skyline/tasks/deploy.yml        |   7 ++
+ ansible/roles/skyline/tasks/main.yml          |   2 +
+ ansible/roles/skyline/tasks/precheck.yml      |  35 ++++++
+ ansible/roles/skyline/tasks/pull.yml          |  11 ++
+ ansible/roles/skyline/tasks/reconfigure.yml   |   2 +
+ ansible/roles/skyline/tasks/register.yml      |   7 ++
+ ansible/roles/skyline/tasks/stop.yml          |  11 ++
+ ansible/roles/skyline/tasks/upgrade.yml       |   1 +
+ .../roles/skyline/templates/gunicorn.py.j2    |  55 +++++++++
+ .../roles/skyline/templates/skyline.yaml.j2   | 115 ++++++++++++++++++
+ ansible/site.yml                              |  10 ++
+ 18 files changed, 435 insertions(+)
+ create mode 100644 ansible/roles/skyline/defaults/main.yml
+ create mode 100644 ansible/roles/skyline/handlers/main.yml
+ create mode 100644 ansible/roles/skyline/tasks/bootstrap.yml
+ create mode 100644 ansible/roles/skyline/tasks/bootstrap_service.yml
+ create mode 100644 ansible/roles/skyline/tasks/check.yml
+ create mode 100644 ansible/roles/skyline/tasks/config.yml
+ create mode 100644 ansible/roles/skyline/tasks/deploy.yml
+ create mode 100644 ansible/roles/skyline/tasks/main.yml
+ create mode 100644 ansible/roles/skyline/tasks/precheck.yml
+ create mode 100644 ansible/roles/skyline/tasks/pull.yml
+ create mode 100644 ansible/roles/skyline/tasks/reconfigure.yml
+ create mode 100644 ansible/roles/skyline/tasks/register.yml
+ create mode 100644 ansible/roles/skyline/tasks/stop.yml
+ create mode 100644 ansible/roles/skyline/tasks/upgrade.yml
+ create mode 100644 ansible/roles/skyline/templates/gunicorn.py.j2
+ create mode 100644 ansible/roles/skyline/templates/skyline.yaml.j2
+
+diff --git a/ansible/group_vars/all.yml b/ansible/group_vars/all.yml
+index d077c851f..edaf41694 100644
+--- a/ansible/group_vars/all.yml
++++ b/ansible/group_vars/all.yml
+@@ -1152,3 +1152,5 @@ distro_python_version: "{{ distro_python_version_map[kolla_base_distro] }}"
+ # Configure telegraf to use the docker daemon itself as an input for
+ # telemetry data.
+ telegraf_enable_docker_input: "no"
++
++enable_skyline: "yes"
+diff --git a/ansible/roles/skyline/defaults/main.yml b/ansible/roles/skyline/defaults/main.yml
+new file mode 100644
+index 000000000..35ec3088a
+--- /dev/null
++++ b/ansible/roles/skyline/defaults/main.yml
+@@ -0,0 +1,46 @@
++---
++project_name: skyline
++log_dir: /var/log/kolla/
++
++skyline_services:
++  skyline:
++    container_name: skyline
++    group: control
++    enabled: true
++    image: "{{ skyline_image_full }}"
++    volumes: "{{ skyline_volumes }}"
++
++skyline_ui_port: 9999
++skyline_ui_listen_address: "0.0.0.0:{{ skyline_ui_port }}"
++
++skyline_gunicorn_port: 28000
++skyline_database_name: "skyline"
++skyline_database_user: "root"
++skyline_database_password: "{{ database_password }}"
++skyline_database_address: "{{ database_address | put_address_in_context('url') }}:{{ database_port }}"
++
++skyline_secret_key: "aCtmgbcUqYUy_HNVg5BDXCaeJgJQzHJXwqbXr0Nmb2o"
++
++skyline_volumes:
++  - "kolla_logs:{{ log_dir }}"
++  - /etc/localtime:/etc/localtime:ro
++  - "{{ node_config_directory }}/skyline:/etc/skyline/"
++
++# Docker Image
++skyline_install_type: "{{ kolla_install_type }}"
++skyline_image: "{{ docker_registry ~ '/' if docker_registry else '' }}{{ docker_namespace }}/{{ kolla_base_distro }}-{{ skyline_install_type }}-skyline"
++skyline_tag: "{{ openstack_tag }}"
++skyline_image_full: "{{ skyline_image }}:{{ skyline_tag }}"
++
++openstack_skyline_auth: "{{ openstack_auth }}"
++skyline_gunicorn_admin_endpoint: "{{ admin_protocol }}://{{ kolla_internal_fqdn | put_address_in_context('url') }}:{{ skyline_gunicorn_port }}"
++skyline_gunicorn_public_endpoint: "{{ public_protocol }}://{{ kolla_external_fqdn | put_address_in_context('url') }}:{{ skyline_gunicorn_port }}"
++skyline_gunicorn_internal_endpoint: "{{ internal_protocol }}://{{ kolla_internal_fqdn | put_address_in_context('url') }}:{{ skyline_gunicorn_port }}"
++skyline_ks_services:
++  - name: "skyline"
++    type: "panel"
++    description: "Custom API"
++    endpoints:
++      - {'interface': 'admin', 'url': '{{ skyline_gunicorn_admin_endpoint }}'}
++      - {'interface': 'internal', 'url': '{{ skyline_gunicorn_internal_endpoint }}'}
++      - {'interface': 'public', 'url': '{{ skyline_gunicorn_public_endpoint }}'}
+diff --git a/ansible/roles/skyline/handlers/main.yml b/ansible/roles/skyline/handlers/main.yml
+new file mode 100644
+index 000000000..0df260c98
+--- /dev/null
++++ b/ansible/roles/skyline/handlers/main.yml
+@@ -0,0 +1,21 @@
++---
++- name: Restart skyline container
++  vars:
++    service_name: skyline
++    service: "{{ skyline_services[service_name] }}"
++  docker_container:
++    name: "{{ service.container_name }}"
++    image: "{{ service.image }}"
++    state: started
++    restart: yes
++    restart_policy: unless-stopped
++    network_mode: host
++    volumes: "{{ service.volumes }}"
++    labels:
++      kolla_version: ""
++  when:
++    - inventory_hostname in groups[service.group]
++    - service.enabled | bool
++    - skyline_gunicorn.changed | bool
++      or skyline_yml.changed | bool
++      or check_skyline_containers.changed | bool
+diff --git a/ansible/roles/skyline/tasks/bootstrap.yml b/ansible/roles/skyline/tasks/bootstrap.yml
+new file mode 100644
+index 000000000..a4a71fd2a
+--- /dev/null
++++ b/ansible/roles/skyline/tasks/bootstrap.yml
+@@ -0,0 +1,18 @@
++---
++- name: Creating Skyline database
++  vars:
++    service_name: skyline
++    service: "{{ skyline_services[service_name] }}"
++  become: true
++  kolla_toolbox:
++    module_name: mysql_db
++    module_args:
++      login_host: "{{ database_address }}"
++      login_port: "{{ database_port }}"
++      login_user: "{{ database_user }}"
++      login_password: "{{ database_password }}"
++      name: "{{ skyline_database_name }}"
++  run_once: True
++  delegate_to: "{{ groups[service.group][0] }}"
++
++- include_tasks: bootstrap_service.yml
+diff --git a/ansible/roles/skyline/tasks/bootstrap_service.yml b/ansible/roles/skyline/tasks/bootstrap_service.yml
+new file mode 100644
+index 000000000..db7274a7c
+--- /dev/null
++++ b/ansible/roles/skyline/tasks/bootstrap_service.yml
+@@ -0,0 +1,22 @@
++---
++- name: Start skyline bootstrap container
++  vars:
++    service_name: skyline
++    service: "{{ skyline_services[service_name] }}"
++  docker_container:
++    name: "{{ service.container_name }}_bootstrap"
++    image: "{{ service.image }}"
++    state: started
++    restart: no
++    network_mode: host
++    volumes: "{{ service.volumes }}"
++    labels:
++      kolla_version: ""
++    env:
++      KOLLA_BOOTSTRAP=""
++  run_once: True
++  become: true
++  delegate_to: "{{ groups[service.group][0] }}"
++  when:
++    - inventory_hostname in groups[service.group]
++    - service.enabled | bool
+diff --git a/ansible/roles/skyline/tasks/check.yml b/ansible/roles/skyline/tasks/check.yml
+new file mode 100644
+index 000000000..ed97d539c
+--- /dev/null
++++ b/ansible/roles/skyline/tasks/check.yml
+@@ -0,0 +1 @@
++---
+diff --git a/ansible/roles/skyline/tasks/config.yml b/ansible/roles/skyline/tasks/config.yml
+new file mode 100644
+index 000000000..f9d041698
+--- /dev/null
++++ b/ansible/roles/skyline/tasks/config.yml
+@@ -0,0 +1,69 @@
++# ensure the existence of '/etc/kolla/skyline'
++- name: Ensuring config directories exist
++  file:
++    path: "{{ node_config_directory }}/{{ item.key }}"
++    state: directory
++    recurse: yes
++  when:
++    - inventory_hostname in groups[item.value.group]
++    - item.value.enabled | bool
++  with_dict: "{{ skyline_services }}"
++
++# ensure the existence of '/var/lib/docker/volumes/kolla_logs/_data/skyline'
++- name: Ensuring log directories exist
++  file:
++    path: "{{ docker_runtime_directory or '/var/lib/docker' }}/volumes/kolla_logs/_data/{{ item.key }}"
++    state: directory
++    recurse: yes
++  when:
++    - inventory_hostname in groups[item.value.group]
++    - item.value.enabled | bool
++  with_dict: "{{ skyline_services }}"
++
++# copy 'templates/gunicorn.py.j2 to'
++# '/etc/kolla/skyline/gunicorn.py'
++- name: Copying over gunicorn.py for skyline
++  vars:
++    service_name: skyline
++    service: "{{ skyline_services[service_name] }}"
++  template:
++    src: gunicorn.py.j2
++    dest: "{{ node_config_directory }}/{{ service_name }}/gunicorn.py"
++  register: skyline_gunicorn
++  when:
++    - inventory_hostname in groups[service.group]
++    - service.enabled | bool
++  notify:
++    - "Restart {{ service_name }} container"
++
++# copy 'templates/skyline.yml.j2 to'
++# '/etc/kolla/skyline/skyline.yml'
++- name: Copying over skyline.yml for skyline
++  vars:
++    service_name: skyline
++    service: "{{ skyline_services[service_name] }}"
++  template:
++    src: skyline.yaml.j2
++    dest: "{{ node_config_directory }}/{{ service_name }}/skyline.yaml"
++  register: skyline_yml
++  when:
++    - inventory_hostname in groups[service.group]
++    - service.enabled | bool
++  notify:
++    - "Restart {{ service_name }} container"
++
++- name: Check skyline containers
++  become: true
++  kolla_docker:
++    action: "compare_container"
++    common_options: "{{ docker_common_options }}"
++    name: "{{ item.value.container_name }}"
++    image: "{{ item.value.image }}"
++    volumes: "{{ item.value.volumes }}"
++  register: check_skyline_containers
++  when:
++    - inventory_hostname in groups[item.value.group]
++    - item.value.enabled | bool
++  with_dict: "{{ skyline_services }}"
++  notify:
++    - "Restart {{ item.key }} container"
+diff --git a/ansible/roles/skyline/tasks/deploy.yml b/ansible/roles/skyline/tasks/deploy.yml
+new file mode 100644
+index 000000000..8fafdf4ac
+--- /dev/null
++++ b/ansible/roles/skyline/tasks/deploy.yml
+@@ -0,0 +1,7 @@
++---
++# create keystone user named skyline.
++- include_tasks: register.yml
++
++- include_tasks: config.yml
++
++- include_tasks: bootstrap.yml
+diff --git a/ansible/roles/skyline/tasks/main.yml b/ansible/roles/skyline/tasks/main.yml
+new file mode 100644
+index 000000000..bc5d1e625
+--- /dev/null
++++ b/ansible/roles/skyline/tasks/main.yml
+@@ -0,0 +1,2 @@
++---
++- include_tasks: "{{ kolla_action }}.yml"
+diff --git a/ansible/roles/skyline/tasks/precheck.yml b/ansible/roles/skyline/tasks/precheck.yml
+new file mode 100644
+index 000000000..e36d3fbb2
+--- /dev/null
++++ b/ansible/roles/skyline/tasks/precheck.yml
+@@ -0,0 +1,35 @@
++---
++- name: Get container facts
++  become: true
++  kolla_container_facts:
++    name:
++      - skyline
++  register: container_facts
++
++- name: Checking free port for Skyline
++  vars:
++    service_name: skyline
++    service: "{{ skyline_services[service_name] }}"
++  wait_for:
++    host: "{{ api_interface_address }}"
++    port: "{{ skyline_gunicorn_port }}"
++    connect_timeout: 1
++    timeout: 1
++    state: stopped
++  when:
++    - container_facts['skyline'] is not defined
++    - inventory_hostname in groups[service.group]
++
++- name: Checking free port for Skyline-UI
++  vars:
++    service_name: skyline
++    service: "{{ skyline_services[service_name] }}"
++  wait_for:
++    host: "{{ api_interface_address }}"
++    port: "{{ skyline_ui_port }}"
++    connect_timeout: 1
++    timeout: 1
++    state: stopped
++  when:
++    - container_facts['skyline'] is not defined
++    - inventory_hostname in groups[service.group]
+diff --git a/ansible/roles/skyline/tasks/pull.yml b/ansible/roles/skyline/tasks/pull.yml
+new file mode 100644
+index 000000000..d9f6e68bb
+--- /dev/null
++++ b/ansible/roles/skyline/tasks/pull.yml
+@@ -0,0 +1,11 @@
++---
++- name: Pulling skyline images
++  become: true
++  kolla_docker:
++    action: "pull_image"
++    common_options: "{{ docker_common_options }}"
++    image: "{{ item.value.image }}"
++  when:
++    - inventory_hostname in groups[item.value.group]
++    - item.value.enabled | bool
++  with_dict: "{{ skyline_services }}"
+diff --git a/ansible/roles/skyline/tasks/reconfigure.yml b/ansible/roles/skyline/tasks/reconfigure.yml
+new file mode 100644
+index 000000000..f670a5b78
+--- /dev/null
++++ b/ansible/roles/skyline/tasks/reconfigure.yml
+@@ -0,0 +1,2 @@
++---
++- include_tasks: deploy.yml
+diff --git a/ansible/roles/skyline/tasks/register.yml b/ansible/roles/skyline/tasks/register.yml
+new file mode 100644
+index 000000000..88eea4327
+--- /dev/null
++++ b/ansible/roles/skyline/tasks/register.yml
+@@ -0,0 +1,7 @@
++---
++- import_role:
++    name: service-ks-register
++  vars:
++    service_ks_register_auth: "{{ openstack_skyline_auth }}"
++    service_ks_register_services: "{{ skyline_ks_services }}"
++  tags: always
+diff --git a/ansible/roles/skyline/tasks/stop.yml b/ansible/roles/skyline/tasks/stop.yml
+new file mode 100644
+index 000000000..a8e927807
+--- /dev/null
++++ b/ansible/roles/skyline/tasks/stop.yml
+@@ -0,0 +1,11 @@
++---
++- name: "Stopping skyline containers"
++  vars:
++    service: "{{ item.value }}"
++  docker_container:
++    name: "{{ service.container_name }}"
++    state: stopped
++  when:
++    - service.enabled | bool
++    - service.container_name not in skip_stop_containers
++  with_dict: "{{ skyline_services }}"
+diff --git a/ansible/roles/skyline/tasks/upgrade.yml b/ansible/roles/skyline/tasks/upgrade.yml
+new file mode 100644
+index 000000000..ed97d539c
+--- /dev/null
++++ b/ansible/roles/skyline/tasks/upgrade.yml
+@@ -0,0 +1 @@
++---
+diff --git a/ansible/roles/skyline/templates/gunicorn.py.j2 b/ansible/roles/skyline/templates/gunicorn.py.j2
+new file mode 100644
+index 000000000..023724b2a
+--- /dev/null
++++ b/ansible/roles/skyline/templates/gunicorn.py.j2
+@@ -0,0 +1,55 @@
++bind = "unix:/var/lib/skyline/skyline.sock"
++workers = 2
++worker_class = "uvicorn.workers.UvicornWorker"
++timeout = 3600
++keepalive = 5
++reuse_port = True
++proc_name = "skyline"
++listen_address = "{{ skyline_ui_listen_address }}"
++
++logconfig_dict = {
++    'version': 1,
++    'disable_existing_loggers': False,
++    "root": {
++          "level": "DEBUG",
++          "handlers": ["console"]
++    },
++    'loggers': {
++        "gunicorn.error": {
++            "level": "DEBUG",
++            "handlers": ["error_file"],
++            "propagate": 0,
++            "qualname": "gunicorn_error"
++        },
++        "gunicorn.access": {
++            "level": "DEBUG",
++            "handlers": ["access_file"],
++            "propagate": 0,
++            "qualname": "access"
++        }
++    },
++    'handlers': {
++        "error_file": {
++            "class": "logging.handlers.RotatingFileHandler",
++            "formatter": "generic",
++            "filename": "/var/log/kolla/skyline/error.log"
++        },
++        "access_file": {
++            "class": "logging.handlers.RotatingFileHandler",
++            "formatter": "generic",
++            "filename": "/var/log/kolla/skyline/access.log",
++        },
++        'console': {
++            'class': 'logging.StreamHandler',
++            'level': 'DEBUG',
++            'formatter': 'generic',
++        },
++    },
++    'formatters': {
++        "generic": {
++            "format": "%(asctime)s [%(process)d]: [%(levelname)s] %(message)s",
++            "datefmt": "[%Y-%m-%d %H:%M:%S %z]",
++            "class": "logging.Formatter"
++        }
++    }
++}
+diff --git a/ansible/roles/skyline/templates/skyline.yaml.j2 b/ansible/roles/skyline/templates/skyline.yaml.j2
+new file mode 100644
+index 000000000..e82bb1258
+--- /dev/null
++++ b/ansible/roles/skyline/templates/skyline.yaml.j2
+@@ -0,0 +1,115 @@
++default:
++  access_token_expire: 3600
++  access_token_renew: 1800
++  cors_allow_origins: []
++  database_url: mysql://{{ skyline_database_user }}:{{ skyline_database_password }}@{{ skyline_database_address }}/{{ skyline_database_name }}
++  debug: false
++  log_dir: /var/log/kolla/skyline
++  prometheus_basic_auth_password: ''
++  prometheus_basic_auth_user: ''
++  prometheus_enable_basic_auth: false
++  prometheus_endpoint: http://localhost:9091
++  secret_key: {{ skyline_secret_key }}
++  session_name: session
++openstack:
++  base_domains:
++  - heat_user_domain
++  base_roles:
++  - keystone_system_admin
++  - keystone_system_reader
++  - keystone_project_admin
++  - keystone_project_member
++  - keystone_project_reader
++  - nova_system_admin
++  - nova_system_reader
++  - nova_project_admin
++  - nova_project_member
++  - nova_project_reader
++  - cinder_system_admin
++  - cinder_system_reader
++  - cinder_project_admin
++  - cinder_project_member
++  - cinder_project_reader
++  - glance_system_admin
++  - glance_system_reader
++  - glance_project_admin
++  - glance_project_member
++  - glance_project_reader
++  - neutron_system_admin
++  - neutron_system_reader
++  - neutron_project_admin
++  - neutron_project_member
++  - neutron_project_reader
++  - heat_system_admin
++  - heat_system_reader
++  - heat_project_admin
++  - heat_project_member
++  - heat_project_reader
++  - placement_system_admin
++  - placement_system_reader
++  - panko_system_admin
++  - panko_system_reader
++  - panko_project_admin
++  - panko_project_member
++  - panko_project_reader
++  - ironic_system_admin
++  - ironic_system_reader
++  - octavia_system_admin
++  - octavia_system_reader
++  - octavia_project_admin
++  - octavia_project_member
++  - octavia_project_reader
++  default_region: RegionOne
++  extension_mapping:
++    fwaas_v2: neutron_firewall
++    vpnaas: neutron_vpn
++  interface_type: public
++  keystone_url: {{ keystone_internal_url }}
++  nginx_prefix: /api/openstack
++  reclaim_instance_interval: 604800
++  service_mapping:
++    baremetal: ironic
++    compute: nova
++    container: zun
++    container-infra: magnum
++    database: trove
++    identity: keystone
++    image: glance
++    key-manager: barbican
++    load-balancer: octavia
++    network: neutron
++    object-store: swift
++    orchestration: heat
++    placement: placement
++    sharev2: manilav2
++    volumev3: cinder
++  system_admin_roles:
++  - admin
++  - system_admin
++  system_project: admin
++  system_project_domain: Default
++  system_reader_roles:
++  - system_reader
++  system_user_domain: Default
++  system_user_name: admin
++  system_user_password: {{ keystone_admin_password }}
++setting:
++  base_settings:
++  - flavor_families
++  flavor_families:
++  - architecture: x86_architecture
++    categories:
++    - name: general_purpose
++      properties: []
++    - name: compute_optimized
++      properties: []
++    - name: memory_optimized
++      properties: []
++    - name: high_clock_speed
++      properties: []
++  - architecture: heterogeneous_computing
++    categories:
++    - name: compute_optimized_type_with_gpu
++      properties: []
++    - name: visualization_compute_optimized_type_with_gpu
++      properties: []
+diff --git a/ansible/site.yml b/ansible/site.yml
+index 395e52f00..c15beffa8 100644
+--- a/ansible/site.yml
++++ b/ansible/site.yml
+@@ -1285,3 +1285,13 @@
+     - { role: masakari,
+         tags: masakari,
+         when: enable_masakari | bool }
++
++- name: Apply role skyline
++  gather_facts: false
++  hosts:
++    - control
++  serial: '{{ kolla_serial|default("0") }}'
++  roles:
++    - { role: skyline,
++        tags: skyline,
++        when: enable_skyline | bool }
+-- 
+2.17.1
+
+
+From 02e99f1a833680c9bfdac30800748911404a099e Mon Sep 17 00:00:00 2001
+From: shaleijie <sha.leijie@99cloud.net>
+Date: Tue, 12 Jul 2022 14:21:42 +0800
+Subject: [PATCH 3/4] fix dcap, ironic-inspector and iscsid
+
+1. Container of dcap_register has no access to /sys/firmware
+
+2. Container of ironic_inspector has no access to log folder after
+reboot
+
+3. Container of iscsid has no access to pid file
+
+4. Change Nuetron security group plugin to openvswitch
+---
+ ansible/roles/dcap/tasks/bootstrap_service.yml          | 1 +
+ ansible/roles/ironic/templates/ironic-inspector.json.j2 | 7 +++++++
+ ansible/roles/iscsi/templates/iscsid.json.j2            | 2 +-
+ ansible/roles/neutron/templates/ml2_conf.ini.j2         | 2 +-
+ 4 files changed, 10 insertions(+), 2 deletions(-)
+
+diff --git a/ansible/roles/dcap/tasks/bootstrap_service.yml b/ansible/roles/dcap/tasks/bootstrap_service.yml
+index 1758b5725..ee6c64873 100644
+--- a/ansible/roles/dcap/tasks/bootstrap_service.yml
++++ b/ansible/roles/dcap/tasks/bootstrap_service.yml
+@@ -13,6 +13,7 @@
+     network_mode: host
+     command: "dcap-register"
+     volumes: "{{ service.volumes }}"
++    privileged: true
+   when:
+     - inventory_hostname in groups[service.group]
+     - service.enabled | bool
+diff --git a/ansible/roles/ironic/templates/ironic-inspector.json.j2 b/ansible/roles/ironic/templates/ironic-inspector.json.j2
+index d82d506d3..51684ec6c 100644
+--- a/ansible/roles/ironic/templates/ironic-inspector.json.j2
++++ b/ansible/roles/ironic/templates/ironic-inspector.json.j2
+@@ -13,5 +13,12 @@
+             "owner": "ironic",
+             "perm": "0600"
+         }{% endif %}
++    ],
++    "permissions": [
++        {
++            "path": "/var/log/kolla/ironic-inspector",
++            "owner": "ironic-inspector:ironic-inspector",
++            "recurse": true
++        }
+     ]
+ }
+diff --git a/ansible/roles/iscsi/templates/iscsid.json.j2 b/ansible/roles/iscsi/templates/iscsid.json.j2
+index f44cf16c9..cfa4d9f35 100644
+--- a/ansible/roles/iscsi/templates/iscsid.json.j2
++++ b/ansible/roles/iscsi/templates/iscsid.json.j2
+@@ -1,4 +1,4 @@
+ {
+-    "command": "iscsid -d 8 -f --pid=/run/iscsid.pid",
++    "command": "iscsid -d 8 -f",
+     "config_files": []
+ }
+diff --git a/ansible/roles/neutron/templates/ml2_conf.ini.j2 b/ansible/roles/neutron/templates/ml2_conf.ini.j2
+index 6a61c3e38..029b541f2 100644
+--- a/ansible/roles/neutron/templates/ml2_conf.ini.j2
++++ b/ansible/roles/neutron/templates/ml2_conf.ini.j2
+@@ -66,7 +66,7 @@ vni_ranges = 1:1000
+ 
+ [securitygroup]
+ {% if neutron_plugin_agent == "openvswitch" or neutron_plugin_agent == "opendaylight" %}
+-firewall_driver = neutron.agent.linux.iptables_firewall.OVSHybridIptablesFirewallDriver
++firewall_driver = openvswitch
+ {% elif neutron_plugin_agent == "linuxbridge" %}
+ firewall_driver = neutron.agent.linux.iptables_firewall.IptablesFirewallDriver
+ {% endif %}
+-- 
+2.17.1
+
+
+From 22ab9f7505887878928fdf8325b24af351731f33 Mon Sep 17 00:00:00 2001
+From: shaleijie <sha.leijie@99cloud.net>
+Date: Tue, 12 Jul 2022 18:36:56 +0800
+Subject: [PATCH 4/4] Fix abnormal problem of kolla_toolbox
+
+After excuting the role of DCAP, kolla_toolbox can not be used by other
+roles.
+---
+ ansible/roles/dcap/defaults/main.yml           |  2 +-
+ ansible/roles/dcap/tasks/bootstrap.yml         |  4 +++-
+ ansible/roles/dcap/tasks/config.yml            | 13 +++++++++++++
+ ansible/roles/dcap/tasks/deploy.yml            |  8 ++++----
+ ansible/roles/dcap/tasks/reconfigure.yml       |  2 +-
+ ansible/roles/skyline/defaults/main.yml        |  4 ++--
+ ansible/roles/skyline/tasks/bootstrap.yml      |  4 +++-
+ ansible/roles/skyline/tasks/deploy.yml         |  6 +++---
+ ansible/roles/skyline/tasks/reconfigure.yml    |  2 +-
+ ansible/roles/skyline/templates/gunicorn.py.j2 |  4 ++--
+ 10 files changed, 33 insertions(+), 16 deletions(-)
+
+diff --git a/ansible/roles/dcap/defaults/main.yml b/ansible/roles/dcap/defaults/main.yml
+index 828019257..e6fae27ac 100644
+--- a/ansible/roles/dcap/defaults/main.yml
++++ b/ansible/roles/dcap/defaults/main.yml
+@@ -58,7 +58,7 @@ dcap_register_image_tag: "latest"
+ dcap_register_image_full: "{{ docker_registry ~ '/' if docker_registry else '' }}{{ custom_dcap_namespace }}/{{ dcap_register_image_name }}:{{ dcap_register_image_tag }}"
+ 
+ dcap_server_volumes:
+-  - "kolla_logs:{{ log_dir }}"
++  - "/var/log/kolla/pccs:{{ log_dir }}"
+   - "/etc/localtime:/etc/localtime:ro"
+   - "{{ node_config_directory }}/{{ dcap_server_service }}/dcap-server.json:/opt/intel/sgx-dcap-pccs/config/default.json"
+ 
+diff --git a/ansible/roles/dcap/tasks/bootstrap.yml b/ansible/roles/dcap/tasks/bootstrap.yml
+index b0a86e54c..95429e79a 100644
+--- a/ansible/roles/dcap/tasks/bootstrap.yml
++++ b/ansible/roles/dcap/tasks/bootstrap.yml
+@@ -11,6 +11,8 @@
+       name: "{{ dcap_database_name }}"
+   run_once: True
+   delegate_to: "{{ groups['control'][0] }}"
++  when:
++    - not use_preconfigured_databases | bool
+ 
+ - name: Creating dcap database user and setting permissions
+   become: true
+@@ -31,4 +33,4 @@
+   when:
+     - not use_preconfigured_databases | bool
+ 
+-- include_tasks: bootstrap_service.yml
++- import_tasks: bootstrap_service.yml
+diff --git a/ansible/roles/dcap/tasks/config.yml b/ansible/roles/dcap/tasks/config.yml
+index 312b4d29c..145ed6ed5 100644
+--- a/ansible/roles/dcap/tasks/config.yml
++++ b/ansible/roles/dcap/tasks/config.yml
+@@ -12,6 +12,19 @@
+     - item.value.enabled | bool
+   with_dict: "{{ dcap_services }}"
+ 
++# ensure the existence of '/var/lib/docker/volumes/kolla_logs/_data/pccs'
++- name: Ensuring log directories exist
++  vars:
++    service_name: "{{ dcap_server_service }}"
++    service: "{{ dcap_services[service_name] }}"
++  file:
++    path: "{{ docker_runtime_directory or '/var/lib/docker' }}/volumes/kolla_logs/_data/pccs"
++    state: directory
++    recurse: yes
++  when:
++    - inventory_hostname in groups[service.group]
++    - service.enabled | bool
++
+ - name: Copying over dcap-server.json
+   vars:
+     service_name: "{{ dcap_server_service }}"
+diff --git a/ansible/roles/dcap/tasks/deploy.yml b/ansible/roles/dcap/tasks/deploy.yml
+index 4f6eaa6db..e50091218 100644
+--- a/ansible/roles/dcap/tasks/deploy.yml
++++ b/ansible/roles/dcap/tasks/deploy.yml
+@@ -1,11 +1,11 @@
+ ---
+-- include: precheck.yml
++- import_tasks: precheck.yml
+ 
+-- include: pull.yml
++- import_tasks: pull.yml
+ 
+-- include: config.yml
++- import_tasks: config.yml
+ 
+-- include: bootstrap.yml
++- import_tasks: bootstrap.yml
+ 
+ - name: Flush handlers
+   meta: flush_handlers
+diff --git a/ansible/roles/dcap/tasks/reconfigure.yml b/ansible/roles/dcap/tasks/reconfigure.yml
+index f670a5b78..5b10a7e11 100644
+--- a/ansible/roles/dcap/tasks/reconfigure.yml
++++ b/ansible/roles/dcap/tasks/reconfigure.yml
+@@ -1,2 +1,2 @@
+ ---
+-- include_tasks: deploy.yml
++- import_tasks: deploy.yml
+diff --git a/ansible/roles/skyline/defaults/main.yml b/ansible/roles/skyline/defaults/main.yml
+index 35ec3088a..8ed820bda 100644
+--- a/ansible/roles/skyline/defaults/main.yml
++++ b/ansible/roles/skyline/defaults/main.yml
+@@ -1,6 +1,6 @@
+ ---
+ project_name: skyline
+-log_dir: /var/log/kolla/
++log_dir: /var/log/skyline
+ 
+ skyline_services:
+   skyline:
+@@ -22,7 +22,7 @@ skyline_database_address: "{{ database_address | put_address_in_context('url') }
+ skyline_secret_key: "aCtmgbcUqYUy_HNVg5BDXCaeJgJQzHJXwqbXr0Nmb2o"
+ 
+ skyline_volumes:
+-  - "kolla_logs:{{ log_dir }}"
++  - "/var/log/kolla/skyline:{{ log_dir }}"
+   - /etc/localtime:/etc/localtime:ro
+   - "{{ node_config_directory }}/skyline:/etc/skyline/"
+ 
+diff --git a/ansible/roles/skyline/tasks/bootstrap.yml b/ansible/roles/skyline/tasks/bootstrap.yml
+index a4a71fd2a..3662d8d4a 100644
+--- a/ansible/roles/skyline/tasks/bootstrap.yml
++++ b/ansible/roles/skyline/tasks/bootstrap.yml
+@@ -14,5 +14,7 @@
+       name: "{{ skyline_database_name }}"
+   run_once: True
+   delegate_to: "{{ groups[service.group][0] }}"
++  when:
++    - not use_preconfigured_databases | bool
+ 
+-- include_tasks: bootstrap_service.yml
++- import_tasks: bootstrap_service.yml
+diff --git a/ansible/roles/skyline/tasks/deploy.yml b/ansible/roles/skyline/tasks/deploy.yml
+index 8fafdf4ac..0ea6ae78a 100644
+--- a/ansible/roles/skyline/tasks/deploy.yml
++++ b/ansible/roles/skyline/tasks/deploy.yml
+@@ -1,7 +1,7 @@
+ ---
+ # create keystone user named skyline.
+-- include_tasks: register.yml
++- import_tasks: register.yml
+ 
+-- include_tasks: config.yml
++- import_tasks: config.yml
+ 
+-- include_tasks: bootstrap.yml
++- import_tasks: bootstrap.yml
+diff --git a/ansible/roles/skyline/tasks/reconfigure.yml b/ansible/roles/skyline/tasks/reconfigure.yml
+index f670a5b78..5b10a7e11 100644
+--- a/ansible/roles/skyline/tasks/reconfigure.yml
++++ b/ansible/roles/skyline/tasks/reconfigure.yml
+@@ -1,2 +1,2 @@
+ ---
+-- include_tasks: deploy.yml
++- import_tasks: deploy.yml
+diff --git a/ansible/roles/skyline/templates/gunicorn.py.j2 b/ansible/roles/skyline/templates/gunicorn.py.j2
+index 023724b2a..55b0f6e81 100644
+--- a/ansible/roles/skyline/templates/gunicorn.py.j2
++++ b/ansible/roles/skyline/templates/gunicorn.py.j2
+@@ -32,12 +32,12 @@ logconfig_dict = {
+         "error_file": {
+             "class": "logging.handlers.RotatingFileHandler",
+             "formatter": "generic",
+-            "filename": "/var/log/kolla/skyline/error.log"
++            "filename": "/var/log/skyline/error.log"
+         },
+         "access_file": {
+             "class": "logging.handlers.RotatingFileHandler",
+             "formatter": "generic",
+-            "filename": "/var/log/kolla/skyline/access.log",
++            "filename": "/var/log/skyline/access.log",
+         },
+         'console': {
+             'class': 'logging.StreamHandler',
+-- 
+2.17.1
+

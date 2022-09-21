@@ -1,0 +1,7 @@
+[intelsgxstack]
+baseurl = https://download.01.org/intelsgxstack/2021-12-08/rhel/repo
+enabled = 1
+gpgcheck = 1
+name = Intel RHEL SGX repository
+module_hotfixes = true
+gpgkey = https://download.01.org/intelsgxstack/2021-12-08/rhel/intel-mvp-stack-gpg.pub
