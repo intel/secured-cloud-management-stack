@@ -61,7 +61,7 @@ User should SSH to 172.16.150.101 to execute them.**
     ```
    
     *SGX-enabled VM image needs to specify property of trait:HW_CPU_X86_SGX.
-     Please refer to [Build VM Image](build-vm-image.md) to create SGX-enabled VM image.*
+     Please build SGX-enabled VM image first.*
 
 3. Create Server
 
@@ -99,7 +99,7 @@ User should SSH to 172.16.150.101 to execute them.**
     ```
 
     *SGX-enabled bare metal image needs to specify property of trait:HW_CPU_X86_SGX.
-     Please refer to [Build Baremetal Image](build-baremetal-image.md) to create SGX-enabled bare metal image.*
+     Please build SGX-enabled bare metal image first.*
 
 3. Create Server
 
