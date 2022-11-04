@@ -433,7 +433,7 @@ kayobe control host bootstrap
     openstack_tag_suffix: "-centos8s"
     ```
 
-13. Upload [Container Images](build-docker-image.md) to registry Container
+13. Build SGX-enabled Docker Images first, then upload them to registry Container
 
     ```bash
     scp <file path of openstack-train-intel-sgx.tar> ~/
@@ -452,7 +452,7 @@ kayobe control host bootstrap
     container_no_proxy: "localhost,127.0.0.1,172.16.150.101"
     ```
 
-15. Upload SGX-enabled [Host Image](./build-host-image.md) and [IPA Image](./build-ironic-ipa-image.md) to the container of bifrost_deploy
+15. Build SGX-enabled Host Image and IPA Image first, then upload them to the container of bifrost_deploy
 
     ```yaml
     sudo docker volume create bifrost_httpboot
@@ -492,8 +492,6 @@ kayobe control host bootstrap
 ## Bare2 and Bare3
 
 ### Enable SGX in BIOS
-
-Please refer to [bios config](bios_config.md) to complete configuration.
 
 ### Install OS
 
@@ -798,7 +796,7 @@ which is based on PXE technology and OpenStack Ironic installed in Bare1.
     EOF
     ```
 
-16. Upload [IPA Image](./build-ironic-ipa-image.md) to `~/src/kayobe-config/etc/kayobe/kolla/config/ironic/`
+16. Build SGX-enabled IPA Image first, then upload them to `~/src/kayobe-config/etc/kayobe/kolla/config/ironic/`
 
     ```bash
     mkdir -p ~/src/kayobe-config/etc/kolla/config/ironic
@@ -814,9 +812,7 @@ which is based on PXE technology and OpenStack Ironic installed in Bare1.
 
 ## Bare4
 
-### Configure BIOS
-
-Please refer to [bios config](bios_config.md) to complete configuration.
+### Enable SGX in BIOS
 
 ### Register Bare4 to Overcloud
 
