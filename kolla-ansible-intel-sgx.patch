@@ -1,7 +1,7 @@
-From 8a2a38282ae91e5cda7305b280f89c262cbc1ca0 Mon Sep 17 00:00:00 2001
+From 74d7a2ba83902db8a2549d832b8c574524febbfa Mon Sep 17 00:00:00 2001
 From: shaleijie <sha.leijie@99cloud.net>
 Date: Thu, 2 Jun 2022 01:43:22 +0800
-Subject: [PATCH 1/4] add role for DCAP services
+Subject: [PATCH 1/5] add role for DCAP services
 
 Change-Id: Ic32531058a1ec3350f76409d8411bdd47a8204b8
 ---
@@ -541,13 +541,13 @@ index 65d9e7b4f..46017f4f2 100644
  keystone_database_password:
  
 -- 
-2.17.1
+2.18.4
 
 
-From ad87617b25313a3a1f6d0f735f5351730c8059a1 Mon Sep 17 00:00:00 2001
+From b5a931059dff2160b737e5909071b50e8cf7c051 Mon Sep 17 00:00:00 2001
 From: shaleijie <sha.leijie@99cloud.net>
 Date: Wed, 22 Jun 2022 18:53:50 +0800
-Subject: [PATCH 2/4] add role for Skyline services
+Subject: [PATCH 2/5] add role for Skyline services
 
 Change-Id: I7ba5f5dfbbb405fb7dee3d58f7c9228e0b7a824c
 ---
@@ -1135,13 +1135,13 @@ index 395e52f00..c15beffa8 100644
 +        tags: skyline,
 +        when: enable_skyline | bool }
 -- 
-2.17.1
+2.18.4
 
 
-From 02e99f1a833680c9bfdac30800748911404a099e Mon Sep 17 00:00:00 2001
+From 71e7d7bf86b6f01ad7f5e34375c5f3c297792150 Mon Sep 17 00:00:00 2001
 From: shaleijie <sha.leijie@99cloud.net>
 Date: Tue, 12 Jul 2022 14:21:42 +0800
-Subject: [PATCH 3/4] fix dcap, ironic-inspector and iscsid
+Subject: [PATCH 3/5] fix dcap, ironic-inspector and iscsid
 
 1. Container of dcap_register has no access to /sys/firmware
 
@@ -1211,13 +1211,13 @@ index 6a61c3e38..029b541f2 100644
  firewall_driver = neutron.agent.linux.iptables_firewall.IptablesFirewallDriver
  {% endif %}
 -- 
-2.17.1
+2.18.4
 
 
-From 22ab9f7505887878928fdf8325b24af351731f33 Mon Sep 17 00:00:00 2001
+From 91e517293a28f701eaec06a4bfac6b65539cd468 Mon Sep 17 00:00:00 2001
 From: shaleijie <sha.leijie@99cloud.net>
 Date: Tue, 12 Jul 2022 18:36:56 +0800
-Subject: [PATCH 4/4] Fix abnormal problem of kolla_toolbox
+Subject: [PATCH 4/5] Fix abnormal problem of kolla_toolbox
 
 After excuting the role of DCAP, kolla_toolbox can not be used by other
 roles.
@@ -1395,5 +1395,32 @@ index 023724b2a..55b0f6e81 100644
          'console': {
              'class': 'logging.StreamHandler',
 -- 
-2.17.1
+2.18.4
+
+
+From 3889466147499cc856ed96bcbcde3bd6c9ab8c11 Mon Sep 17 00:00:00 2001
+From: shaleijie <sha.leijie@99cloud.net>
+Date: Fri, 4 Nov 2022 02:06:41 -0400
+Subject: [PATCH 5/5] Security enhancement
+
+Change the value of skyline_secret_key to a settable variable
+---
+ ansible/roles/skyline/defaults/main.yml | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/ansible/roles/skyline/defaults/main.yml b/ansible/roles/skyline/defaults/main.yml
+index 8ed820bda..1ae1a3a17 100644
+--- a/ansible/roles/skyline/defaults/main.yml
++++ b/ansible/roles/skyline/defaults/main.yml
+@@ -19,7 +19,7 @@ skyline_database_user: "root"
+ skyline_database_password: "{{ database_password }}"
+ skyline_database_address: "{{ database_address | put_address_in_context('url') }}:{{ database_port }}"
+ 
+-skyline_secret_key: "aCtmgbcUqYUy_HNVg5BDXCaeJgJQzHJXwqbXr0Nmb2o"
++skyline_secret_key: "{{ skyline_keystone_password }}"
+ 
+ skyline_volumes:
+   - "/var/log/kolla/skyline:{{ log_dir }}"
+-- 
+2.18.4
 
