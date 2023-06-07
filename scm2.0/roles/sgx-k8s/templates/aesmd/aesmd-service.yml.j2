@@ -1,0 +1,42 @@
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: aesmd-service
+  labels:
+    app: aesmd-service
+spec:
+  selector:
+    matchLabels:
+      app: aesmd-service
+  template:
+    metadata:
+      labels:
+        app: aesmd-service
+      annotations:
+        sgx.intel.com/quote-provider: "aesmd"
+    spec:
+      hostNetwork: true
+      containers:
+      - name: aesmd
+        image: {{ aesmd_image }}
+        securityContext:
+          readOnlyRootFilesystem: true
+        resources:
+          limits:
+            sgx.intel.com/epc: "1Mi"
+        imagePullPolicy: Never
+        volumeMounts:
+        - name: aesmdconf
+          mountPath: /etc/aesmd.conf
+          subPath: aesmd.conf
+        - name: qplconf
+          mountPath: /etc/sgx_default_qcnl.conf
+          subPath: sgx_default_qcnl.conf
+      volumes:
+      - name: aesmdconf
+        configMap:
+           name: aesmdconf
+      - name: qplconf
+        configMap:
+           name: qplconf

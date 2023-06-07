@@ -1,0 +1,81 @@
+---
+- name: Set proxy for apt
+  block:
+    - name: Check http::proxy in apt configuration files
+      raw: apt-config dump | grep -qsi 'Acquire::http::proxy'
+      register: _need_http_proxy
+      failed_when: false
+      changed_when: false
+      # This command should always run, even in check mode
+      check_mode: false
+      when: http_proxy != ""
+
+    - name: Add http_proxy to /etc/apt/apt.conf if http_proxy is defined
+      raw: echo 'Acquire::http::proxy "{{ http_proxy }}";' >> /etc/apt/apt.conf
+      when:
+        - http_proxy != ""
+        - _need_http_proxy.rc != 0
+
+    - name: Check https::proxy in apt configuration files
+      raw: apt-config dump | grep -qsi 'Acquire::https::proxy'
+      register: _need_https_proxy
+      failed_when: false
+      changed_when: false
+      # This command should always run, even in check mode
+      check_mode: false
+      when: https_proxy != ""
+
+    - name: Add https_proxy to /etc/apt/apt.conf if https_proxy is defined
+      raw: echo 'Acquire::https::proxy "{{ https_proxy }}";' >> /etc/apt/apt.conf
+      when:
+        - https_proxy != ""
+        - _need_https_proxy.rc != 0
+
+    - name: Update apt
+      raw: apt-get update
+
+  when: ansible_os_family == "Debian"
+
+- name: Set proxy for yum and dnf
+  block:
+    - name: Add proxy to yum.conf and dnf.conf if http_proxy is defined
+      ini_file:
+        path: "{{ item }}"
+        section: main
+        option: proxy
+        value: "{{ http_proxy }}"
+        state: "present"
+        no_extra_spaces: true
+        mode: 0644
+      with_items:
+        - '/etc/yum.conf'
+        - '/etc/dnf/dnf.conf'
+
+    - name: Check if subscription-manager exists
+      stat:
+        path: /sbin/subscription-manager
+      register: _check_subscription_manager
+
+    - name: Add proxy to RHEL subscription-manager
+      command: /sbin/subscription-manager config --server.proxy_hostname={{ http_proxy | regex_replace(':\d+$') }} --server.proxy_port={{ http_proxy | regex_replace('^.*:') }}
+      when: _check_subscription_manager.stat.exists
+
+  when: ansible_os_family == "RedHat" and http_proxy != ""
+
+- name: Set proxy to global environment
+  block:
+    - name: Delete existing http_proxy
+      raw: sed -r -i '/(.)*http_proxy(.)*/d' /etc/environment
+    
+    - name: Delete existing https_proxy
+      raw: sed -r -i '/(.)*https_proxy(.)*/d' /etc/environment
+
+    - name: Write http_proxy
+      raw: echo "export http_proxy={{ http_proxy }}" >> /etc/environment
+      when: http_proxy != ""
+      
+    - name: Write https_proxy
+      raw: echo "export https_proxy={{ https_proxy }}" >> /etc/environment
+      when: https_proxy != ""
+
+  when: http_proxy != "" or https_proxy != ""

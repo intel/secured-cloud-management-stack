@@ -1,0 +1,26 @@
+---
+kubespray_first_master: "{{ groups['kubernetes_master_hosts'][0] }}"
+
+# plugins
+k8s_plugins_url: "https://github.com/intel/intel-device-plugins-for-kubernetes/archive/refs/tags/v0.23.0.tar.gz"
+k8s_cert_manager_url: "https://github.com/jetstack/cert-manager/releases/download/v1.3.1/cert-manager.yaml"
+
+# mpa tool
+enable_mpa: true
+mpa_image: "mpa:v1.15"
+mpa_image_file: "mpa.tar"
+
+# pccs service
+pccs_image: "pccs:v1.15"
+pccs_image_file: "pccs.tar"
+pccs_port: 8081
+pccs_uri: "https://api.trustedservices.intel.com/sgx/certification/v4/"
+pccs_api_key: "d9cafa222a414522a9c4169c07815910"
+pccs_proxy: "{{ https_proxy }}"
+pccs_admin_passwd: "pccs1234.."
+pccs_user_passwd: "pccs1234.."
+pccs_mode: "LAZY"
+
+# aesmd service
+aesmd_image: "aesmd:v2.18"
+aesmd_image_file: "aesmd.tar"

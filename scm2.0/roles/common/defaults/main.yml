@@ -1,0 +1,3 @@
+---
+# For CentOS8
+centos8_repo_url: "http://mirrors.aliyun.com/repo/Centos-8.repo"

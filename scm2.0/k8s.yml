@@ -1,0 +1,62 @@
+---
+- name: Do common setup
+  hosts: kubernetes_hosts
+  become: true
+  gather_facts: yes
+  tasks:
+    - include_role:
+        name: common
+
+- name: Do SGX baremetal configurations
+  hosts: sgx_hosts
+  become: true
+  gather_facts: yes
+  tasks:
+    - include_role:
+        name: sgx-baremetal
+
+- name: Do Kubernetes baremetal configurations
+  hosts: kubernetes_hosts
+  become: true
+  gather_facts: yes
+  tasks:
+    - include_role:
+        name: k8s-baremetal
+
+- name: Install Kubernetes
+  hosts: deployment_host
+  become: false
+  gather_facts: no
+  tasks:
+    - include_role:
+        name: kubespray
+
+- name: Let current non-root user use kubectl
+  hosts: kubernetes_master_hosts
+  become: false
+  gather_facts: no
+  vars:
+    local_user: "{{ lookup('env','USER') }}"
+    local_home: "{{ lookup('env','HOME') }}"
+  tasks:
+    - name: Copy kube config
+      block:
+        - name: Remove existing $HOME/.kube
+          file:
+            path: "{{ local_home }}/.kube"
+            state: absent
+        - name: Create new $HOME/.kube
+          file:
+            path: "{{ local_home }}/.kube"
+            state: directory
+        - name: Copy admin.conf to $HOME/.kube
+          shell: cp /etc/kubernetes/admin.conf "{{ local_home }}/.kube/config"
+          become: true
+        - name: Change user and group permissions
+          file:
+            path: "{{ local_home }}/.kube/config"
+            owner: "{{ local_user }}"
+            group: "{{ local_user }}"
+            mode: "0644"
+          become: true
+      when: local_user != "root"

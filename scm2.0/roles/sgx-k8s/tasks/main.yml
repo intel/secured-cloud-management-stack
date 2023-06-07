@@ -1,0 +1,29 @@
+---
+- name: Load images
+  include: image.yml
+  become: true
+  environment:
+    PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+- name: Deploy on first master node
+  block:
+    - name: Get hostname
+      shell: hostname
+      register: _first_master_hostname
+
+    - debug:
+        var: _first_master_hostname.stdout
+      
+    - include: plugin.yml
+
+    - include: mpa.yml
+      when: enable_mpa
+
+    - include: pccs.yml
+    
+    - include: aesmd.yml
+    
+  environment:
+    PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+  when: inventory_hostname == kubespray_first_master

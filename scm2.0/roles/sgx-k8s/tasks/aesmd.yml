@@ -1,0 +1,49 @@
+---
+- name: Check if AESMD service is already deployed
+  shell: if [ "$(kubectl get pods -A | grep aesmd-service)" != "" ]; then echo "yes"; else echo "no"; fi
+  register: _check_aesmd
+
+- name: Deploy AESMD service
+  block:
+    - name: Check if aesmdconf configmap exists
+      shell: if [ "$(kubectl get configmaps -A | grep aesmdconf)" != "" ]; then echo "yes"; else echo "no"; fi
+      register: _check_aesmdconf
+
+    - name: Delete existing aesmdconf configmap
+      shell: kubectl delete configmap aesmdconf
+      when: _check_aesmdconf.stdout == "yes"
+
+    - name: Copy aesmd.conf file
+      template:
+        src: aesmd/aesmd.conf.j2
+        dest: /tmp/aesmd.conf
+    
+    - name: Create aesmdconf configmap
+      shell: kubectl create configmap aesmdconf --from-file=/tmp/aesmd.conf
+
+    - name: Check if qplconf configmap exists
+      shell: if [ "$(kubectl get configmaps -A | grep qplconf)" != "" ]; then echo "yes"; else echo "no"; fi
+      register: _check_qplconf
+
+    - name: Delete existing qplconf configmap
+      shell: kubectl delete configmap qplconf
+      when: _check_qplconf.stdout == "yes"
+
+    - name: Copy sgx_default_qcnl.conf file
+      template:
+        src: aesmd/sgx_default_qcnl.conf.j2
+        dest: /tmp/sgx_default_qcnl.conf
+    
+    - name: Create qplconf configmap
+      shell: kubectl create configmap qplconf --from-file=/tmp/sgx_default_qcnl.conf
+
+    - name: Copy aesmd-service.yml file
+      template:
+        src: aesmd/aesmd-service.yml.j2
+        dest: /tmp/aesmd-service.yml
+
+    - name: Deploy AESMD service
+      shell: kubectl apply -f /tmp/aesmd-service.yml
+
+  when: _check_aesmd.stdout == "no"
+  

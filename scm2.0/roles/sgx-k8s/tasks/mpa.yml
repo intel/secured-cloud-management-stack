@@ -1,0 +1,27 @@
+---
+- name: Check if MPA Tool is already deployed
+  shell: if [ "$(kubectl get pods -A | grep mpa-tool)" != "" ]; then echo "yes"; else echo "no"; fi
+  register: _check_mpa
+
+- name: Deploy MPA Tool
+  block:
+    - name: Copy mpa-tool.yml file
+      template:
+        src: mpa/mpa-tool.yml.j2
+        dest: /tmp/mpa-tool.yml
+
+    - name: Deploy MPA Tool
+      shell: kubectl apply -f /tmp/mpa-tool.yml
+
+    - name: Wait for MPA Tool to finish run
+      shell: if [ "$(kubectl get pods -A |  grep mpa-tool)" != "" -a "$(kubectl get pods -A |  grep mpa-tool | grep ErrImageNeverPull)" = "" -a "$(kubectl get pods -A |  grep mpa-tool | grep ContainerCreating)" = "" -a "$(kubectl get pods -A |  grep mpa-tool | grep Pending)" = "" -a "$(kubectl get pods -A |  grep mpa-tool | grep Running)" = "" ]; then echo "yes"; else echo "no"; fi
+      register: _finish_run
+      until: _finish_run.stdout == "yes"
+      retries: 10
+
+    - name: Delete MPA Tool
+      shell: kubectl delete -f /tmp/mpa-tool.yml
+
+  when: _check_mpa.stdout == "no"
+  
+  

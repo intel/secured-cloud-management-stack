@@ -1,0 +1,6 @@
+---
+- include: proxy.yml
+
+- name: Replace repo on CentOS/RedHat 8
+  include: replace_repo.yml
+  when: ansible_os_family == "RedHat" and ansible_distribution_major_version == "8"

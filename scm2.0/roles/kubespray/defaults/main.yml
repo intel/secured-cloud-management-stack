@@ -1,0 +1,18 @@
+---
+# Get k8s hosts from inventory groups
+kubespray_inventory_hosts: "{{ groups['kubernetes_hosts'] }}"
+kubespray_inventory_master_hosts: "{{ groups['kubernetes_master_hosts'] }}"
+kubespray_inventory_worker_hosts: "{{ groups['kubernetes_worker_hosts'] }}"
+# Get k8s hosts from inventory hosts
+kubespray_hosts: "{{ ' '.join(kubespray_inventory_hosts) }}"
+kubespray_master_hosts: "{{ ','.join(kubespray_inventory_master_hosts) }}"
+kubespray_worker_hosts: "{{ ','.join(kubespray_inventory_worker_hosts) }}"
+kuberspray_masters_count: "{{ kubespray_inventory_master_hosts | length }}"
+# Repository url to download kubespray
+kubespray_url: https://github.com/kubernetes-sigs/kubespray/archive/refs/tags/v2.21.0.tar.gz
+# Set k8s maser node quantity
+kuberspray_host_prefix: "kubenode"
+# Set local home
+local_home: "{{ lookup('env','HOME') }}"
+# Set venv path
+targetenv: "{{ local_home }}/venv"

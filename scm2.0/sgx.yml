@@ -1,0 +1,9 @@
+---
+# If K8S cluster already exists, please run cp `/etc/kubernetes/admin.conf ~/.kube/config` first
+- name: Deploy sgx-k8s
+  hosts: kubernetes_hosts
+  become: false
+  gather_facts: no
+  tasks:
+    - include_role:
+        name: sgx-k8s

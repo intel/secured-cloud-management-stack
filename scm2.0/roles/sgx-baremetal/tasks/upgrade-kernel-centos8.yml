@@ -1,0 +1,48 @@
+---
+- set_fact:
+    kernel_deploy: "intel-mvp-mainline-kernel-sgx-kvm-5.15.5"
+    kernel_wanted: "5.15.5-mvp2.el8.x86_64"
+
+- name: Add intelsgxstack repo
+  get_url:
+    url: "{{ intelsgxstack_repo_url }}"
+    dest: /etc/yum.repos.d/
+  register: _download_stack_repo
+  until: _download_stack_repo is not failed
+  retries: 5
+    
+- name: Check if the active kernel is the kernel wanted
+  shell: if [ "$(uname -r)" = "{{ kernel_wanted }}" ]; then echo "yes"; else echo "no"; fi
+  register: _kernel_is_wanted
+
+- name: Upgrade kernel
+  block:
+    - name: Check if the kernel wanted is installed
+      shell: if [ "$(rpm -qa | grep ^{{ kernel_deploy }})" != "" ]; then echo "yes"; else echo "no";fi
+      register: _kernel_wanted_is_installed
+
+    - name: Install kernel
+      package:
+        name: "{{ kernel_deploy }}"
+        state: present
+      when: _kernel_wanted_is_installed.stdout == "no"
+
+    - name: Ensure grubby exists
+      package:
+        name:
+          - grubby
+        state: present
+
+    - name: Check if the default kernel is the kernel wanted
+      shell: if [ "$(grubby --default-kernel | sed 's|/boot/vmlinuz-||')" = "{{ kernel_wanted }}" ]; then echo "yes"; else echo "no"; fi
+      register: _default_kernel_is_wanted
+
+    - name: Set the default kernel to the kernel wanted
+      shell: grubby --set-default="/boot/vmlinuz-{{ kernel_wanted }}"
+      when: _default_kernel_is_wanted.stdout == "no"
+    
+    - name: Set host_reboot to true
+      set_fact:
+        host_reboot: true
+        
+  when: _kernel_is_wanted.stdout == "no"

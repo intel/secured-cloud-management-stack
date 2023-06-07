@@ -1,0 +1,32 @@
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: pccs-service
+  labels:
+    app: pccs-service
+spec:
+  restartPolicy: OnFailure
+  containers:
+    - image: {{ pccs_image }}
+      name: pccs-service
+      imagePullPolicy: Never
+      ports:
+        - containerPort: {{ pccs_port }}
+          hostPort: {{ pccs_port }}
+      volumeMounts:
+        - name: pccsconf
+          mountPath: /opt/intel/sgx-dcap-pccs/config/default.json
+          subPath: default.json
+  volumes:
+    - name: pccsconf
+      configMap:
+        name: pccsconf
+  tolerations:
+    - key: node-role.kubernetes.io/master
+      effect: NoSchedule
+    - key: node-role.kubernetes.io/control-plane
+      effect: NoSchedule
+  nodeSelector:
+    kubernetes.io/hostname: {{ _first_master_hostname.stdout }}
+

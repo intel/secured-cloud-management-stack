@@ -1,0 +1,63 @@
+---
+- name: Download linux firmware
+  get_url:
+    url: "{{ linux_firmware_url }}"
+    dest: /tmp/linux-firmware-20201218.tar.gz
+  register: _download_firmware
+  until: _download_firmware is not failed
+  retries: 5
+
+- name: Remove existing linux-firmware-20201218 directory
+  file:
+    path: /tmp/linux-firmware-20201218
+    state: absent
+
+- name: Create linux-firmware-20201218 directory 
+  file:
+    path: /tmp/linux-firmware-20201218
+    state: directory
+
+- name: Decompress linux firmware
+  shell: tar -zxf /tmp/linux-firmware-20201218.tar.gz -C /tmp/linux-firmware-20201218 --strip-components 1
+  args:
+    warn: false
+
+- name: Copy linux firmware
+  shell: cp /tmp/linux-firmware-20201218/i915/*.bin /lib/firmware/i915/ && cp /tmp/linux-firmware-20201218/rtl_nic/* /lib/firmware/rtl_nic/
+  args:
+    warn: false
+
+- name: Download linux headers generic 
+  get_url:
+    url: "{{ linux_headers_generic_url }}"
+    dest: /tmp/linux-headers-5.11.0-051100-generic_5.11.0-051100.202102142330_amd64.deb
+  register: _download_linux_headers_generic
+  until: _download_linux_headers_generic is not failed
+  retries: 5
+
+- name: Download linux headers 
+  get_url:
+    url: "{{ linux_headers_url }}"
+    dest: /tmp/linux-headers-5.11.0-051100_5.11.0-051100.202102142330_all.deb
+  register: _download_linux_headers
+  until: _download_linux_headers is not failed
+  retries: 5
+
+- name: Download linux image unsigned generic 
+  get_url:
+    url: "{{ linux_image_unsigned_generic_url }}"
+    dest: /tmp/linux-image-unsigned-5.11.0-051100-generic_5.11.0-051100.202102142330_amd64.deb
+  register: _download_linux_image_unsigned_generic
+  until: _download_linux_image_unsigned_generic is not failed
+  retries: 5
+
+- name: Download linux modules
+  get_url:
+    url: "{{ linux_modules_url }}"
+    dest: /tmp/linux-modules-5.11.0-051100-generic_5.11.0-051100.202102142330_amd64.deb
+  register: _download_linux_modules
+  until: _download_linux_modules is not failed
+  retries: 5
+
+- name: Install kernel
+  shell: dpkg -i /tmp/*.deb

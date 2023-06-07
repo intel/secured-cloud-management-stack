@@ -1,0 +1,52 @@
+{
+    "HTTPS_PORT" : {{ pccs_port }},
+    "hosts" : "0.0.0.0",
+    "uri": "{{ pccs_uri }}",
+    "ApiKey" : "{{ pccs_api_key }}",
+    "proxy" : "{{ pccs_proxy }}",
+    "RefreshSchedule": "0 0 1 * * *",
+    "UserTokenHash" : "{{ _user_token_hash.stdout }}",
+    "AdminTokenHash" : "{{ _admin_token_hash.stdout }}",
+    "CachingFillMode" : "{{ pccs_mode }}",
+    "LogLevel" : "info",
+    "DB_CONFIG" : "sqlite",
+    "sqlite" : {
+        "database" : "database",
+        "username" : "username",
+        "password" : "password",
+        "options" : {
+            "host": "localhost",
+            "dialect": "sqlite",
+            "pool": {
+                "max": 5,
+                "min": 0,
+                "acquire": 30000,
+                "idle": 10000
+            },
+            "define": {
+                "freezeTableName": true
+            },
+            "logging" : false,
+            "storage": "pckcache.db"
+        }
+    },
+    "mysql" : {
+        "database" : "pckcache",
+        "username" : "root",
+        "password" : "mypass",
+        "options" : {
+            "host": "localhost",
+            "dialect": "mysql",
+            "pool": {
+                "max": 5,
+                "min": 0,
+                "acquire": 30000,
+                "idle": 10000
+            },
+            "define": {
+                "freezeTableName": true
+            },
+            "logging" : false
+        }
+    }
+}

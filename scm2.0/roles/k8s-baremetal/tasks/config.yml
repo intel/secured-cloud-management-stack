@@ -1,0 +1,125 @@
+---
+#SELinux module needed packages for ubuntu
+#      - python3-selinux
+#      - selinux-policy-default
+- name: Disable unnecessary services on RedHat
+  block:
+    - name: Check if firewalld is installed
+      command: rpm -q firewalld
+      args:
+        warn: false
+      register: _firewalld_check
+      failed_when: false
+
+    - name: Disable firewalld
+      systemd:
+        name: firewalld
+        state: stopped
+        enabled: no
+      when: _firewalld_check.rc == 0
+    
+    - name: Check if iptables is installed
+      command: rpm -q iptables
+      args:
+        warn: false
+      register: _iptables_check
+      failed_when: false
+
+    - name: Flush iptables
+      command: iptables -F
+      when: _iptables_check.rc == 0
+
+    - name: Check if libselinux is installed
+      command: rpm -q libselinux
+      args:
+        warn: false
+      register: _libselinux_check
+      failed_when: false
+
+    - name: Disable SELinux
+      command: setenforce 0
+      when: _libselinux_check.rc == 0
+      failed_when: false
+    
+    - name: Remove podman and buildah
+      package:
+        name:
+          - podman
+          - buildah
+        state: absent
+
+  when: ansible_os_family == "RedHat"
+
+- name: Disable unnecessary services on Debian
+  block:
+    - name: Check if ufw is installed
+      command: dpkg -s ufw
+      args:
+        warn: false
+      register: _ufw_check
+      failed_when: false
+
+    - name: Disable ufw
+      systemd:
+        name: ufw
+        state: stopped
+        enabled: no
+      when: _ufw_check.rc == 0
+
+    - name: Check if iptables is installed
+      command: dpkg -s iptables
+      args:
+        warn: false
+      register: _iptables_check
+      failed_when: false
+
+    - name: Flush iptables
+      command: iptables -F
+      when: _iptables_check.rc == 0
+
+    - name: Check if apparmor is installed
+      command: dpkg -s apparmor
+      args:
+        warn: false
+      register: _apparmor_check
+      failed_when: false
+
+    - name: Disable apparmor
+      systemd:
+        name: apparmor
+        state: stopped
+        enabled: no
+      when: _apparmor_check.rc == 0
+
+    - name: Check if selinux-utils is installed
+      command: dpkg -s selinux-utils
+      args:
+        warn: false
+      register: _selinux_check
+      failed_when: false
+
+    - name: Disable SELinux
+      command: setenforce 0
+      when: _selinux_check.rc == 0
+      failed_when: false
+
+  when: ansible_os_family == "Debian"
+
+- name: Disable SWAP
+  shell: swapoff -a && sysctl -w vm.swappiness=0
+
+- name: Install br_netfilter
+  modprobe:
+    name: br_netfilter
+    state: present
+
+- name: Enable ip forward
+  sysctl:
+    name: "{{ item.name }}"
+    value: "{{ item.value }}"
+    state: present
+    reload: "{{ item.reload }}"
+  with_items:
+    - { name: net.ipv4.ip_forward, value: 1, reload: yes}
+    - { name: net.bridge.bridge-nf-call-ip6tables, value: 1, reload: yes }
+    - { name: net.bridge.bridge-nf-call-iptables , value: 1, reload: yes }

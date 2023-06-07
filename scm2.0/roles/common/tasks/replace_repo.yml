@@ -1,0 +1,36 @@
+---
+- name: Check if CentOS-8.repo file exists
+  stat:
+    path: /etc/yum.repos.d/CentOS-8.repo
+  register: _check_centos8_repo
+
+- name: Replace repo
+  block:
+    - name: List repo files
+      shell: ls
+      args:
+        chdir: /etc/yum.repos.d
+      register: _files_list
+ 
+    - name: Remove all repo files
+      file:
+        path: /etc/yum.repos.d/{{ item }}
+        state: absent
+      with_items:
+        - "{{ _files_list.stdout_lines }}"
+
+    - name: Add repo
+      get_url:
+        url: "{{ centos8_repo_url }}"
+        dest: /etc/yum.repos.d/CentOS-8.repo
+      register: _download_centos8_repo
+      until: _download_centos8_repo is not failed
+      retries: 5
+      
+  when: not _check_centos8_repo.stat.exists
+
+- name: Enable EPEL repo
+  dnf:
+    name: epel-release
+    state: latest
+

@@ -1,0 +1,37 @@
+---
+- name: Check if SGX device exists
+  shell: if [ -c /dev/sgx_enclave -a -c /dev/sgx_provision ]; then echo "yes"; else echo "no"; fi
+  register: _check_sgx_device
+
+- name: Upgrade kernel on CentOS/RedHat 8
+  include: upgrade-kernel-centos8.yml
+  when: ansible_os_family == "RedHat" and ansible_distribution_major_version == "8" and _check_sgx_device.stdout == "no"
+
+- name: Upgrade kernel on Ubuntu bionic
+  include: upgrade-kernel-ubuntu18.yml
+  when: ansible_os_family == "Debian" and ansible_distribution_release == "bionic" and _check_sgx_device.stdout == "no"
+
+- name: Ensure group "sgx_prv" exists
+  group:
+    name: sgx_prv
+    state: present
+    
+- name: Install SGX dev node rule
+  copy:
+    src: 10-sgx.rules
+    dest: /etc/udev/rules.d/10-sgx.rules
+
+- name: "Reload udev rules"
+  shell: udevadm trigger
+
+- name: Reboot host and wait for it to restart
+  reboot:
+    msg: "Reboot initiated by Ansible"
+    reboot_timeout: 3600
+    test_command: whoami
+  when: host_reboot
+
+- name: Ensure SGX device exists
+  shell: if [ -c /dev/sgx_enclave -a -c /dev/sgx_provision ]; then echo "yes"; else echo "no"; fi
+  register: _ensure_sgx_device
+  failed_when: _ensure_sgx_device.stdout == "no"

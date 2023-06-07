@@ -1,0 +1,73 @@
+---
+- name: Ensure all nodes are ready
+  shell: if [ "$(kubectl get nodes | grep NotReady)" = "" ]; then echo "yes"; else echo "no"; fi
+  register: _all_nodes_ready
+  until: _all_nodes_ready.stdout == "yes"
+  retries: 10
+
+- name: Check if SGX device plugin is already applied
+  shell: if [ "$(kubectl get pods -A | grep intel-sgx-plugin)" != "" ]; then echo "yes"; else echo "no"; fi
+  register: _check_plugins
+
+- name: Install SGX device plugin
+  block:
+    - name: Ensure all pods are ready
+      shell: if [ "$(kubectl get pods -A | grep 0/1)" = "" ]; then echo "yes"; else echo "no"; fi
+      register: _all_pods_ready
+      until: _all_pods_ready.stdout == "yes"
+      retries: 10
+
+    - name: Download plugins {{ k8s_plugins_url }}
+      get_url:
+        url: "{{ k8s_plugins_url }}"
+        dest: "/tmp/plugins.tar.gz"
+      register: _download_device_plugin
+      until: _download_device_plugin is not failed
+      retries: 5
+
+    - name: Remove existing intel-device-plugins directory
+      file:
+        path: /tmp/intel-device-plugins
+        state: absent
+
+    - name: Decompress plugins
+      shell: mkdir /tmp/intel-device-plugins && tar -xzf /tmp/plugins.tar.gz -C /tmp/intel-device-plugins --strip-components 1
+      args:
+        warn: false
+
+    - name: Check if cert-manager already applied
+      shell: if [ "$(kubectl get pods -A | grep cert-manager)" != "" ]; then echo "yes"; else echo "no"; fi
+      register: _check_cert_manager
+
+    - name: Download cert-manager {{ k8s_cert_manager_url }}
+      get_url:
+        url: "{{ k8s_cert_manager_url }}"
+        dest: "/tmp/cert-manager.yaml"
+      register: _download_cert_manager
+      until: _download_cert_manager is not failed
+      retries: 5
+      when: _check_cert_manager.stdout == "no"
+
+    - name: Install cert-manager
+      shell: kubectl apply -f /tmp/cert-manager.yaml
+      when: _check_cert_manager.stdout == "no"
+
+    - name: Ensure cert-manager is ready
+      shell: if [ "$(kubectl get pods -A | grep cert-manager)" != "" -a "$(kubectl get pods -A | grep cert-manager | grep 0/1)" = "" ]; then echo "yes"; else echo "no"; fi
+      register: _ensure_cert_manager
+      until: _ensure_cert_manager.stdout == "yes"
+      retries: 20
+
+    - name: Wait for 10s (Fix admissionwebhook "certificate signed by unknown authority" bug)
+      shell: sleep 10
+
+    - name: Install SGX device plugins
+      shell: kubectl apply -k /tmp/intel-device-plugins/deployments/sgx_plugin/overlays/epc-nfd/
+
+    - name: Ensure SGX device plugin is ready
+      shell: if [ "$(kubectl get pods -A |  grep node-feature-discovery)" != "" -a "$(kubectl get pods -A |  grep intelsgxwebhook)" != "" -a "$(kubectl get pods -A |  grep node-feature-discovery | grep 0/1)" = "" -a "$(kubectl get pods -A |  grep intelsgxwebhook | grep 0/1)" = "" ]; then echo "yes"; else echo "no"; fi
+      register: _ensure_plugins
+      until: _ensure_plugins.stdout == "yes"
+      retries: 30
+
+  when: _check_plugins.stdout == "no"

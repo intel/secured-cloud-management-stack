@@ -1,0 +1,42 @@
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: mpa-tool
+  labels:
+    app: mpa-tool
+spec:
+  selector:
+    matchLabels:
+      app: mpa-tool
+  template:
+    metadata:
+      labels:
+        app: mpa-tool
+    spec:
+      hostNetwork: true
+      containers:
+      - name: mpa-tool
+        image: {{ mpa_image }}
+        securityContext:
+          privileged: true
+        imagePullPolicy: Never
+        volumeMounts:
+        - name: modules
+          mountPath: /lib/modules
+        - name: dev
+          mountPath: /dev
+        - name: firmware
+          mountPath: /sys/firmware
+      volumes:
+      - name: modules
+        hostPath:
+          path: /lib/modules
+      - name: dev
+        hostPath:
+          path: /dev
+      - name: firmware
+        hostPath:
+          path: /sys/firmware
+      nodeSelector:
+        feature.node.kubernetes.io/intel.sgx: "true"

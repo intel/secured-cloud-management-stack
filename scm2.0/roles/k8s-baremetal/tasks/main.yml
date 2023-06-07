@@ -1,0 +1,3 @@
+---
+- include: package.yml
+- include: config.yml

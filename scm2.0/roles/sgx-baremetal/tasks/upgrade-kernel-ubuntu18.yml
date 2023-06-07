@@ -1,0 +1,48 @@
+- set_fact:
+    kernel_wanted: "5.11.0-051100-generic"
+
+- name: Check if the active kernel is the kernel wanted
+  shell: if [ "$(uname -r)" = "{{ kernel_wanted }}" ]; then echo "yes"; else echo "no"; fi
+  register: _kernel_is_wanted
+
+- name: Upgrade kernel
+  block:
+    - name: Check if the kernel wanted is installed
+      shell: if [ "$(dpkg -l | grep {{ kernel_wanted }})" != "" ]; then echo "yes"; else echo "no";fi
+      register: _kernel_wanted_is_installed
+
+    - name: Install kernel
+      include: install-kernel-ubuntu18.yml
+      when: _kernel_wanted_is_installed.stdout == "no"
+
+    - name: Check if the default kernel is the kernel wanted
+      shell: if [ "$(grep {{ kernel_wanted }} /etc/default/grub)" != "" ]; then echo "yes"; else echo "no"; fi
+      register: _default_kernel_is_wanted
+
+    - name: Get advanced name
+      shell: grep "submenu" /boot/grub/grub.cfg | awk '{print $(NF-1)}' | sed "s/'//g"
+      register: _advanced_name
+
+    - debug:
+        var: _advanced_name
+    
+    - name: Get wanted name
+      shell: grep "gnulinux-{{ kernel_wanted }}-advanced" /boot/grub/grub.cfg | awk '{print $(NF-1)}' | sed "s/'//g"
+      register: _wanted_name
+
+    - debug:
+        var: _wanted_name
+
+    - name: Set the default kernel to the kernel wanted
+      shell: sed -r -i 's/^GRUB_DEFAULT=(.)*/GRUB_DEFAULT="{{ _advanced_name.stdout }}>{{ _wanted_name.stdout }}"/' /etc/default/grub
+      when: _default_kernel_is_wanted.stdout == "no"
+    
+    - name: Update grub
+      shell: update-grub
+      when: _default_kernel_is_wanted.stdout == "no"
+
+    - name: Set host_reboot to true
+      set_fact:
+        host_reboot: true
+      
+  when: _kernel_is_wanted.stdout == "no"

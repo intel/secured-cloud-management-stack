@@ -1,0 +1,10 @@
+---
+host_reboot: false
+# For CentOS8
+intelsgxstack_repo_url: "https://download.01.org/intelsgxstack/2021-12-08/rhel/intelsgxstack.repo"
+# For Ubuntu18
+linux_firmware_url: "https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git/snapshot/linux-firmware-20201218.tar.gz"
+linux_headers_generic_url: "https://kernel.ubuntu.com/~kernel-ppa/mainline/v5.11/amd64/linux-headers-5.11.0-051100-generic_5.11.0-051100.202102142330_amd64.deb"
+linux_headers_url: "https://kernel.ubuntu.com/~kernel-ppa/mainline/v5.11/amd64/linux-headers-5.11.0-051100_5.11.0-051100.202102142330_all.deb"
+linux_image_unsigned_generic_url: "https://kernel.ubuntu.com/~kernel-ppa/mainline/v5.11/amd64/linux-image-unsigned-5.11.0-051100-generic_5.11.0-051100.202102142330_amd64.deb"
+linux_modules_url: "https://kernel.ubuntu.com/~kernel-ppa/mainline/v5.11/amd64/linux-modules-5.11.0-051100-generic_5.11.0-051100.202102142330_amd64.deb"

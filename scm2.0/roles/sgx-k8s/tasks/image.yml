@@ -1,0 +1,154 @@
+---
+- name: Check if container_engine is supported
+  debug:
+    var: container_engine
+  failed_when: container_engine != "containerd" and container_engine != "docker"
+
+- name: Load MPA image
+  block:
+    - name: Check if MPA image exists (containerd)
+      shell: if [ "$(ctr -n k8s.io image ls | grep {{ mpa_image }})" != "" ]; then echo "yes"; else echo "no"; fi
+      register: _mpa_image_exists_containerd
+      when: container_engine == "containerd"
+
+    - set_fact:
+        _mpa_image_exists: "{{ _mpa_image_exists_containerd }}"
+      when: container_engine == "containerd"
+
+    - name: Check if MPA image exists (docker)
+      shell: if [ "$(docker images | grep {{  mpa_image.split(':')[0] }} | grep {{  mpa_image.split(':')[1] }})" != "" ]; then echo "yes"; else echo "no"; fi
+      register: _mpa_image_exists_docker
+      when: container_engine == "docker"
+
+    - set_fact:
+        _mpa_image_exists: "{{ _mpa_image_exists_docker }}"
+      when: container_engine == "docker"
+
+    - name: Check if mpa_image_file exists and is not a soft link
+      stat:
+        path: "{{ role_path }}/files/{{ mpa_image_file }}"
+      register: mpa_image_file_exists
+      failed_when: mpa_image_file_exists.stat.islnk is not defined or mpa_image_file_exists.stat.islnk
+      delegate_to: "{{ groups['deployment_host'][0] }}"
+      when: _mpa_image_exists.stdout == "no"
+
+    - name: Copy MPA image file
+      copy:
+        src: "{{ mpa_image_file }}"
+        dest: /tmp/{{ mpa_image_file }}
+      when: _mpa_image_exists.stdout == "no"
+
+    - name: Load MPA image (containerd)
+      shell: ctr -n k8s.io image import /tmp/{{ mpa_image_file }}
+      when: 
+        - _mpa_image_exists.stdout == "no"
+        - container_engine == "containerd"
+
+    - name: Load MPA image (docker)
+      shell: docker load -i /tmp/{{ mpa_image_file }}
+      when: 
+        - _mpa_image_exists.stdout == "no"
+        - container_engine == "docker"
+
+  when:
+    - enable_mpa
+    - inventory_hostname in groups['kubernetes_worker_hosts']
+    - inventory_hostname in groups['sgx_hosts']
+
+- name: Load PCCS image
+  block:
+    - name: Check if PCCS image exists (containerd)
+      shell: if [ "$(ctr -n k8s.io image ls | grep {{ pccs_image }})" != "" ]; then echo "yes"; else echo "no"; fi
+      register: _pccs_image_exists_containerd
+      when: container_engine == "containerd"
+
+    - set_fact:
+        _pccs_image_exists: "{{ _pccs_image_exists_containerd }}"
+      when: container_engine == "containerd"
+
+    - name: Check if PCCS image exists (docker)
+      shell: if [ "$(docker images | grep {{ pccs_image.split(':')[0] }} | grep {{ pccs_image.split(':')[1] }})" != "" ]; then echo "yes"; else echo "no"; fi
+      register: _pccs_image_exists_docker
+      when: container_engine == "docker"
+
+    - set_fact:
+        _pccs_image_exists: "{{ _pccs_image_exists_docker }}"
+      when: container_engine == "docker"
+    
+    - name: Check if pccs_image_file exists and is not a soft link
+      stat:
+        path: "{{ role_path }}/files/{{ pccs_image_file }}"
+      register: pccs_image_file_exists
+      failed_when: pccs_image_file_exists.stat.islnk is not defined or pccs_image_file_exists.stat.islnk
+      delegate_to: "{{ groups['deployment_host'][0] }}"
+      when: _pccs_image_exists.stdout == "no"
+
+    - name: Copy PCCS image file
+      copy:
+        src: "{{ pccs_image_file }}"
+        dest: /tmp/{{ pccs_image_file }}
+      when: _pccs_image_exists.stdout == "no"
+
+    - name: Load PCCS image (containerd)
+      shell: ctr -n k8s.io image import /tmp/{{ pccs_image_file }}
+      when:
+        - _pccs_image_exists.stdout == "no"
+        - container_engine == "containerd"
+
+    - name: Load PCCS image (docker)
+      shell: docker load -i /tmp/{{ pccs_image_file }}
+      when:
+        - _pccs_image_exists.stdout == "no"
+        - container_engine == "docker"
+      
+  when: inventory_hostname == kubespray_first_master
+
+- name: Load AESMD image
+  block:
+    - name: Check if AESMD image exists (containerd)
+      shell: if [ "$(ctr -n k8s.io image ls | grep {{ aesmd_image }})" != "" ]; then echo "yes"; else echo "no"; fi
+      register: _aesmd_image_exists_containerd
+      when: container_engine == "containerd"
+
+    - set_fact:
+        _aesmd_image_exists: "{{ _aesmd_image_exists_containerd }}"
+      when: container_engine == "containerd"
+
+    - name: Check if AESMD image exists (docker)
+      shell: if [ "$(docker images | grep {{ aesmd_image.split(':')[0] }} | grep {{ aesmd_image.split(':')[1] }})" != "" ]; then echo "yes"; else echo "no"; fi
+      register: _aesmd_image_exists_docker
+      when: container_engine == "docker"
+
+    - set_fact:
+        _aesmd_image_exists: "{{ _aesmd_image_exists_docker }}"
+      when: container_engine == "docker"
+    
+    - name: Check if aesmd_image_file exists and is not a soft link
+      stat:
+        path: "{{ role_path }}/files/{{ aesmd_image_file }}"
+      register: aesmd_image_file_exists
+      failed_when: aesmd_image_file_exists.stat.islnk is not defined or aesmd_image_file_exists.stat.islnk
+      delegate_to: "{{ groups['deployment_host'][0] }}"
+      when: _aesmd_image_exists.stdout == "no"
+
+    - name: Copy AESMD image file
+      copy:
+        src: "{{ aesmd_image_file }}"
+        dest: /tmp/{{ aesmd_image_file }}
+      when: _aesmd_image_exists.stdout == "no"
+
+    - name: Load AESMD image (containerd)
+      shell: ctr -n k8s.io image import /tmp/{{ aesmd_image_file }}
+      when:
+        - _aesmd_image_exists.stdout == "no"
+        - container_engine == "containerd"
+
+    - name: Load AESMD image (docker)
+      shell: docker load -i /tmp/{{ aesmd_image_file }}
+      when:
+        - _aesmd_image_exists.stdout == "no"
+        - container_engine == "docker"
+
+  when:
+    - inventory_hostname in groups['kubernetes_worker_hosts']
+    - inventory_hostname in groups['sgx_hosts']

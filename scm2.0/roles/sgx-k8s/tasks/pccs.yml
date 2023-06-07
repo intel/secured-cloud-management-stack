@@ -1,0 +1,49 @@
+---
+- name: Check if PCCS service is already deployed
+  shell: if [ "$(kubectl get pods -A | grep pccs-service)" != "" ]; then echo "yes"; else echo "no"; fi
+  register: _check_pccs
+
+- name: Deploy PCCS service
+  block:
+    - name: Checking free port for PCCS service
+      wait_for:
+        host: "{{ kubespray_first_master }}"
+        port: "{{ pccs_port }}"
+        connect_timeout: 1
+        timeout: 1
+        state: stopped
+
+    - name: Check if pccsconf configmap exists
+      shell: if [ "$(kubectl get configmaps -A | grep pccsconf)" != "" ]; then echo "yes"; else echo "no"; fi
+      register: _check_pccsconf
+
+    - name: Delete existing pccsconf configmap
+      shell: kubectl delete configmap pccsconf
+      when: _check_pccsconf.stdout == "yes"
+    
+    - name: Get user token hash
+      shell: echo -n "{{ pccs_user_passwd }}" | sha512sum | tr -d '[:space:]-'
+      register: _user_token_hash
+
+    - name: Get admin token hash
+      shell: echo -n "{{ pccs_admin_passwd }}" | sha512sum | tr -d '[:space:]-'
+      register: _admin_token_hash
+
+    - name: Copy default.json file
+      template:
+        src: pccs/default.json.j2
+        dest: /tmp/default.json
+
+    - name: Create pccsconf configmap
+      shell: kubectl create configmap pccsconf --from-file=/tmp/default.json
+
+    - name: Copy pccs-service.yml file
+      template:
+        src: pccs/pccs-service.yml.j2
+        dest: /tmp/pccs-service.yml
+
+    - name: Deploy PCCS service
+      shell: kubectl apply -f /tmp/pccs-service.yml
+
+  when: _check_pccs.stdout == "no"
+  

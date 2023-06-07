@@ -1,0 +1,19 @@
+---
+- name: Ensure required packages installed
+  package:
+    name:
+      - python3
+      - git
+    state: present
+
+- name: Check if /usr/bin/python exists
+  stat:
+    path: /usr/bin/python
+  register: _check_python
+
+- name: Create /usr/bin/python link
+  file:
+    src: /usr/bin/python3
+    dest: /usr/bin/python
+    state: link
+  when: not _check_python.stat.exists
