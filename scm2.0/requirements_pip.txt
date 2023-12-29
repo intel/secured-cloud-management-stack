@@ -1,4 +1,4 @@
-ansible==7.0.0
+ansible==8.5.0
 ansible-core==2.15.5
 cryptography==41.0.6
 jinja2==2.11.3
