@@ -15,7 +15,7 @@ pccs_image: "pccs:v1.15"
 pccs_image_file: "pccs.tar"
 pccs_port: 8081
 pccs_uri: "https://api.trustedservices.intel.com/sgx/certification/v4/"
-pccs_api_key: "d9cafa222a414522a9c4169c07815910"
+pccs_api_key: ""
 pccs_proxy: "{{ https_proxy }}"
 pccs_admin_passwd: "pccs1234.."
 pccs_user_passwd: "pccs1234.."
