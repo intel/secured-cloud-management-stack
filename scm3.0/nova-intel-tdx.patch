@@ -1,0 +1,1323 @@
+From 6213036760c387338611d32dee9cfc6ee1e6a75f Mon Sep 17 00:00:00 2001
+From: spevenhe <xinyi.he@intel.com>
+Date: Thu, 10 Aug 2023 16:09:29 +0800
+Subject: [PATCH] Support TDX in train OpenStack
+
+added tdx qemu
+
+add launchSecurity
+
+add uefi and rom loader
+
+add memory private
+
+add ioapic
+
+remove video and graphics
+
+change console
+
+add image property: hw_mem_encryption_tdx
+
+add flag to remove video and graph
+
+remove comments
+
+address comments
+
+format
+
+fix log to support td-vm reboot
+
+add scheduler
+
+add custom name
+
+rename resources
+
+remove logs
+
+fix
+
+add remote attestation
+
+add SDL tests and uts
+
+remove cpu socket check
+---
+ nova/compute/api.py                           |  15 ++
+ nova/conf/libvirt.py                          |   8 +
+ nova/objects/fields.py                        |   7 +
+ nova/objects/image_meta.py                    |   7 +
+ nova/scheduler/utils.py                       |  17 ++
+ .../api/openstack/compute/test_serversV21.py  |  18 ++
+ nova/tests/unit/scheduler/test_utils.py       | 147 +++++++++++++
+ nova/tests/unit/virt/libvirt/test_driver.py   | 106 +++++++++-
+ nova/tests/unit/virt/libvirt/test_host.py     |  42 ++++
+ nova/tests/unit/virt/test_hardware.py         | 194 ++++++++++++++++++
+ nova/utils.py                                 |   2 +
+ nova/virt/hardware.py                         |  70 ++++++-
+ nova/virt/libvirt/config.py                   |  67 +++++-
+ nova/virt/libvirt/driver.py                   | 124 +++++++++--
+ nova/virt/libvirt/host.py                     |  35 ++++
+ 15 files changed, 837 insertions(+), 22 deletions(-)
+
+diff --git a/nova/compute/api.py b/nova/compute/api.py
+index d3dfd735e0..df4eca09af 100644
+--- a/nova/compute/api.py
++++ b/nova/compute/api.py
+@@ -741,6 +741,8 @@ class API(base.Base):
+ 
+         API._validate_flavor_image_mem_encryption(instance_type, image_meta)
+ 
++        API._validate_flavor_image_mem_encryption_tdx(instance_type, image_meta)
++
+         API._validate_flavor_image_sgx_epc(instance_type, image_meta)
+ 
+         # validate PMU extra spec and image metadata
+@@ -774,6 +776,19 @@ class API(base.Base):
+         # necessary; if not, we can ignore the result returned.
+         hardware.get_mem_encryption_constraint(instance_type, image)
+ 
++    @staticmethod
++    def _validate_flavor_image_mem_encryption_tdx(instance_type, image):
++        """Validate that the flavor and image don't make contradictory
++        requests regarding memory encryption.
++
++        :param instance_type: Flavor object
++        :param image: an ImageMeta object
++        :raises: nova.exception.FlavorImageConflict
++        """
++        # This library function will raise the exception for us if
++        # necessary; if not, we can ignore the result returned.
++        hardware.get_mem_encryption_tdx_constraint(instance_type, image)
++
+     @staticmethod
+     def _validate_flavor_image_sgx_epc(flavor, image_meta):
+         """Validate contradictory.
+diff --git a/nova/conf/libvirt.py b/nova/conf/libvirt.py
+index 0331342c44..f2eecb4192 100644
+--- a/nova/conf/libvirt.py
++++ b/nova/conf/libvirt.py
+@@ -893,6 +893,14 @@ Related options:
+ * It's recommended to consider including ``x86_64=q35`` in
+   :oslo.config:option:`libvirt.hw_machine_type`; see
+   :ref:`deploying-sev-capable-infrastructure` for more on this.
++"""),
++    cfg.IntOpt('num_memory_encrypted_guests_tdx',
++               default=None,
++               min=0,
++               help="""
++Available capacity of TD-VM for host's guests.
++This value should be less than TD-VM configuration in host's BIOS.
++Set to 0 to disable TD-VM.
+ """),
+     cfg.IntOpt('sgx_epc_mb',
+                default=0,
+diff --git a/nova/objects/fields.py b/nova/objects/fields.py
+index 366a970737..5d10e82c14 100644
+--- a/nova/objects/fields.py
++++ b/nova/objects/fields.py
+@@ -753,6 +753,11 @@ class PointerModelType(BaseNovaEnum):
+ 
+     ALL = (USBTABLET)
+ 
++class TDXRemoteAttestation(BaseNovaEnum):
++    TDVMCALL = "tdvmcall"
++    VSOCK = "vsock"
++
++    ALL = (TDVMCALL, VSOCK)
+ 
+ class NotificationPriority(BaseNovaEnum):
+     AUDIT = 'audit'
+@@ -1275,6 +1280,8 @@ class InstanceTaskStateField(BaseEnumField):
+ class InstancePowerStateField(BaseEnumField):
+     AUTO_TYPE = InstancePowerState()
+ 
++class InstanceRemoteAttestationField(BaseEnumField):
++    AUTO_TYPE = TDXRemoteAttestation()
+ 
+ class ListOfListsOfStringsField(fields.AutoTypedField):
+     AUTO_TYPE = List(List(fields.String()))
+diff --git a/nova/objects/image_meta.py b/nova/objects/image_meta.py
+index f81812f1fd..e9c2e72747 100644
+--- a/nova/objects/image_meta.py
++++ b/nova/objects/image_meta.py
+@@ -319,6 +319,13 @@ class ImageMetaProps(base.NovaObject):
+         # encrypted memory
+         'hw_mem_encryption': fields.FlexibleBooleanField(),
+ 
++        # boolean indicating that the guest needs to be booted with
++        # intel TDX encrypted memory
++        'hw_mem_encryption_tdx': fields.FlexibleBooleanField(),
++
++        # choices of tdx's remote attestation: tdvmcall/vsock
++        'hw_tdx_ra_type': fields.InstanceRemoteAttestationField(),
++
+         # One of the magic strings 'small', 'any', 'large'
+         # or an explicit page size in KB (eg 4, 2048, ...)
+         'hw_mem_page_size': fields.StringField(),
+diff --git a/nova/scheduler/utils.py b/nova/scheduler/utils.py
+index befb7d3916..97bfecd916 100644
+--- a/nova/scheduler/utils.py
++++ b/nova/scheduler/utils.py
+@@ -139,6 +139,7 @@ class ResourceRequest(object):
+                 self._add_resource(None, orc.DISK_GB, disk)
+ 
+         self._translate_memory_encryption(request_spec.flavor, image)
++        self._translate_memory_encryption_tdx(request_spec.flavor, image)
+ 
+         self._translate_vpmems_request(request_spec.flavor)
+ 
+@@ -197,6 +198,22 @@ class ResourceRequest(object):
+         LOG.debug("Added %s=1 to requested resources",
+                   orc.MEM_ENCRYPTION_CONTEXT)
+ 
++    def _translate_memory_encryption_tdx(self, flavor, image):
++        """When the hw:mem_encryption extra spec or the hw_mem_encryption
++        image property are requested, translate into a request for
++        resources:CUSTOM_MEM_ENCRYPTION_CONTEXT_TDX=1 which requires a slot on a
++        host which can support encryption of the guest memory.
++        """
++        # NOTE(aspiers): In theory this could raise FlavorImageConflict,
++        # but we already check it in the API layer, so that should never
++        # happen.
++        if not hardware.get_mem_encryption_tdx_constraint(flavor, image):
++            # No memory encryption required, so no further action required.
++            return
++        self._add_resource(None, utils.TDX_RESOURCE_CLASS, 1)
++        LOG.debug("Added %s=1 to requested resources",
++                  utils.TDX_RESOURCE_CLASS)
++
+     def _translate_vpmems_request(self, flavor):
+         """When the hw:pmem extra spec is present, require hosts which can
+         provide enough vpmem resources.
+diff --git a/nova/tests/unit/api/openstack/compute/test_serversV21.py b/nova/tests/unit/api/openstack/compute/test_serversV21.py
+index d5736cecce..9097f4c11e 100644
+--- a/nova/tests/unit/api/openstack/compute/test_serversV21.py
++++ b/nova/tests/unit/api/openstack/compute/test_serversV21.py
+@@ -6166,6 +6166,24 @@ class ServersControllerCreateTest(test.TestCase):
+                           self.controller.create,
+                           self.req, body=self.body)
+ 
++    @mock.patch('nova.virt.hardware.get_mem_encryption_tdx_constraint',
++                side_effect=exception.FlavorImageConflict(
++                    message="fake conflict reason"))
++    def test_create_instance_raise_flavor_image_conflict_tdx(
++            self, mock_conflict):
++        self.assertRaises(webob.exc.HTTPBadRequest,
++                          self.controller.create,
++                          self.req, body=self.body)
++
++    @mock.patch('nova.virt.hardware.get_mem_encryption_tdx_constraint',
++                side_effect=exception.InvalidMachineType(
++                    message="fake conflict reason"))
++    def test_create_instance_raise_invalid_machine_type_tdx(
++            self, mock_conflict):
++        self.assertRaises(webob.exc.HTTPBadRequest,
++                          self.controller.create,
++                          self.req, body=self.body)
++
+     @mock.patch('nova.virt.hardware.numa_get_constraints',
+                 side_effect=exception.ImageCPUPinningForbidden())
+     def test_create_instance_raise_image_cpu_pinning_forbidden(
+diff --git a/nova/tests/unit/scheduler/test_utils.py b/nova/tests/unit/scheduler/test_utils.py
+index e368aaf6ee..28f5e8b208 100644
+--- a/nova/tests/unit/scheduler/test_utils.py
++++ b/nova/tests/unit/scheduler/test_utils.py
+@@ -23,6 +23,7 @@ from nova import objects
+ from nova.scheduler.client import report
+ from nova.scheduler import utils
+ from nova import test
++from nova import utils as nova_utils
+ from nova.tests.unit import fake_instance
+ from nova.tests.unit.scheduler import fakes
+ 
+@@ -1617,6 +1618,152 @@ class TestEncryptedMemoryTranslation(TestUtilsBase):
+                             hw_mem_encryption=image_prop))
+                 )
+ 
++class TestEncryptedMemoryTranslationTDX(TestUtilsBase):
++    flavor_name = 'm1.test'
++    image_name = 'cirros'
++
++    def _get_request_spec(self, extra_specs, image):
++        flavor = objects.Flavor(name=self.flavor_name,
++                                vcpus=1,
++                                memory_mb=1024,
++                                root_gb=10,
++                                ephemeral_gb=5,
++                                swap=0,
++                                extra_specs=extra_specs)
++
++        # NOTE(aspiers): RequestSpec.flavor is not nullable, but
++        # RequestSpec.image is.
++        reqspec = objects.RequestSpec(flavor=flavor)
++
++        if image:
++            reqspec.image = image
++
++        return reqspec
++
++    def _get_resource_request(self, extra_specs, image):
++        reqspec = self._get_request_spec(extra_specs, image)
++        return utils.ResourceRequest(reqspec)
++
++    def _get_expected_resource_request(self, mem_encryption_context):
++        expected_resources = {
++            'VCPU': 1,
++            'MEMORY_MB': 1024,
++            'DISK_GB': 15,
++        }
++        if mem_encryption_context:
++            expected_resources[nova_utils.TDX_RESOURCE_CLASS] = 1
++
++        expected = FakeResourceRequest()
++        expected._rg_by_id[None] = objects.RequestGroup(
++            use_same_provider=False,
++            resources=expected_resources)
++        return expected
++
++    def _test_encrypted_memory_support_not_required(self, extra_specs,
++                                                    image=None):
++        resreq = self._get_resource_request(extra_specs, image)
++        expected = self._get_expected_resource_request(False)
++
++        self.assertResourceRequestsEqual(expected, resreq)
++
++    def test_encrypted_memory_support_empty_extra_specs(self):
++        self._test_encrypted_memory_support_not_required(extra_specs={})
++
++    def test_encrypted_memory_support_false_extra_spec(self):
++        for extra_spec in ('0', 'false', 'False'):
++            self._test_encrypted_memory_support_not_required(
++                extra_specs={'hw:mem_encryption_tdx': extra_spec})
++
++    def test_encrypted_memory_support_empty_image_props(self):
++        self._test_encrypted_memory_support_not_required(
++            extra_specs={},
++            image=objects.ImageMeta(properties=objects.ImageMetaProps()))
++
++    def test_encrypted_memory_support_false_image_prop(self):
++        for image_prop in ('0', 'false', 'False'):
++            self._test_encrypted_memory_support_not_required(
++                extra_specs={},
++                image=objects.ImageMeta(
++                    properties=objects.ImageMetaProps(
++                        hw_mem_encryption_tdx=image_prop))
++            )
++
++    def test_encrypted_memory_support_both_false(self):
++        for extra_spec in ('0', 'false', 'False'):
++            for image_prop in ('0', 'false', 'False'):
++                self._test_encrypted_memory_support_not_required(
++                    extra_specs={'hw:mem_encryption_tdx': extra_spec},
++                    image=objects.ImageMeta(
++                        properties=objects.ImageMetaProps(
++                            hw_mem_encryption_tdx=image_prop))
++                )
++
++    def _test_encrypted_memory_tdx_support_conflict(self, extra_spec,
++                                                image_prop_in,
++                                                image_prop_out):
++        # NOTE(aspiers): hw_mem_encryption_tdx image property is a
++        # FlexibleBooleanField, so the result should always be coerced
++        # to a boolean.
++        self.assertIsInstance(image_prop_out, bool)
++
++        image = objects.ImageMeta(
++            name=self.image_name,
++            properties=objects.ImageMetaProps(
++                hw_mem_encryption_tdx=image_prop_in)
++        )
++
++        reqspec = self._get_request_spec(
++            extra_specs={'hw:mem_encryption_tdx': extra_spec},
++            image=image)
++
++        # Sanity check that our test request spec has an extra_specs
++        # dict, which is needed in order for there to be a conflict.
++        self.assertIn('flavor', reqspec)
++        self.assertIn('extra_specs', reqspec.flavor)
++
++        error = (
++            "Flavor %(flavor_name)s has hw:mem_encryption extra spec "
++            "explicitly set to %(flavor_val)s, conflicting with "
++            "image %(image_name)s which has hw_mem_encryption property "
++            "explicitly set to %(image_val)s"
++        )
++        exc = self.assertRaises(
++            exception.FlavorImageConflict,
++            utils.ResourceRequest, reqspec
++        )
++        error_data = {
++            'flavor_name': self.flavor_name,
++            'flavor_val': extra_spec,
++            'image_name': self.image_name,
++            'image_val': image_prop_out,
++        }
++        self.assertEqual(error % error_data, str(exc))
++
++    def test_encrypted_memory_support_conflict1(self):
++        for extra_spec in ('0', 'false', 'False'):
++            for image_prop_in in ('1', 'true', 'True'):
++                self._test_encrypted_memory_tdx_support_conflict(
++                    extra_spec, image_prop_in, True
++                )
++
++    def test_encrypted_memory_support_conflict2(self):
++        for extra_spec in ('1', 'true', 'True'):
++            for image_prop_in in ('0', 'false', 'False'):
++                self._test_encrypted_memory_tdx_support_conflict(
++                    extra_spec, image_prop_in, False
++                )
++
++    @mock.patch.object(utils, 'LOG')
++    def _test_encrypted_memory_support_required(self, requesters, extra_specs,
++                                                mock_log, image=None):
++        resreq = self._get_resource_request(extra_specs, image)
++        expected = self._get_expected_resource_request(True)
++
++        self.assertResourceRequestsEqual(expected, resreq)
++        mock_log.debug.assert_has_calls([
++            mock.call('Added %s=1 to requested resources',
++                      nova_utils.TDX_RESOURCE_CLASS)
++        ])
+ 
+ class TestResourcesFromRequestGroupDefaultPolicy(test.NoDBTestCase):
+     """These test cases assert what happens when the group policy is missing
+diff --git a/nova/tests/unit/virt/libvirt/test_driver.py b/nova/tests/unit/virt/libvirt/test_driver.py
+index 90656dcf92..d342587f53 100644
+--- a/nova/tests/unit/virt/libvirt/test_driver.py
++++ b/nova/tests/unit/virt/libvirt/test_driver.py
+@@ -115,6 +115,7 @@ from nova.virt.libvirt import guest as libvirt_guest
+ from nova.virt.libvirt import host
+ from nova.virt.libvirt.host import SEV_KERNEL_PARAM_FILE
+ from nova.virt.libvirt.host import SGX_KERNEL_PARAM_FILE
++from nova.virt.libvirt.host import TDX_KERNEL_PARAM_FILE
+ from nova.virt.libvirt import imagebackend
+ from nova.virt.libvirt import imagecache
+ from nova.virt.libvirt import migration as libvirt_migrate
+@@ -6401,6 +6402,7 @@ class LibvirtConnTestCase(test.NoDBTestCase,
+     @mock.patch('nova.virt.libvirt.driver.os.path.exists')
+     @test.patch_exists(SEV_KERNEL_PARAM_FILE, False)
+     @test.patch_exists(SGX_KERNEL_PARAM_FILE, False)
++    @test.patch_exists(TDX_KERNEL_PARAM_FILE, False)
+     def test_get_guest_config_with_rng_backend(self, mock_path):
+         self.flags(virt_type='kvm',
+                    rng_dev_path='/dev/hw_rng',
+@@ -7081,6 +7083,7 @@ class LibvirtConnTestCase(test.NoDBTestCase,
+     @mock.patch('os.path.exists', return_value=True)
+     @test.patch_exists(SEV_KERNEL_PARAM_FILE, False)
+     @test.patch_exists(SGX_KERNEL_PARAM_FILE, False)
++    @test.patch_exists(TDX_KERNEL_PARAM_FILE, False)
+     def test_get_guest_config_aarch64(self, mock_path_exists,
+                                       mock_numa, mock_storage, mock_get_arch):
+         def get_host_capabilities_stub(self):
+@@ -7137,6 +7140,7 @@ class LibvirtConnTestCase(test.NoDBTestCase,
+     @mock.patch('os.path.exists', return_value=True)
+     @test.patch_exists(SEV_KERNEL_PARAM_FILE, False)
+     @test.patch_exists(SGX_KERNEL_PARAM_FILE, False)
++    @test.patch_exists(TDX_KERNEL_PARAM_FILE, False)
+     def test_get_guest_config_aarch64_with_graphics(self, mock_path_exists,
+                                                     mock_numa, mock_storage,
+                                                     mock_get_arch):
+@@ -25595,15 +25599,14 @@ class TestLibvirtSGX(test.NoDBTestCase):
+ 
+     def setUp(self):
+         super(TestLibvirtSGX, self).setUp()
++        self.useFixture(fakelibvirt.FakeLibvirtFixture())
+         self.driver = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), True)
+ 
+-    @mock.patch('nova.virt.libvirt.host.Host.supports_intel_sgx',
+-                new=mock.Mock(return_value=False))
+     def test_get_host_sgx_epc_mb_zero(self):
+         self.assertEqual(0, self.driver._get_host_sgx_epc_mb())
+ 
+     @mock.patch('nova.virt.libvirt.host.Host.supports_intel_sgx',
+-                new=mock.Mock(return_value=False))
++                new=mock.Mock(return_value=True))
+     def test_get_host_sgx_epc_mb_config(self):
+         self.flags(sgx_epc_mb=100, group='libvirt')
+         self.assertEqual(100, self.driver._get_host_sgx_epc_mb())
+@@ -25638,3 +25641,100 @@ class TestLibvirtSGX(test.NoDBTestCase):
+                        vconfig.LibvirtConfigGuestQemuCommandLine))
+         _str = 'memory-backend-epc,id=mem1,size=%dM,prealloc=on' % epc_size
+         self.assertTrue(_str in guest_tmp.sgx.arguments)
++
++
++class TestLibvirtTDX(test.NoDBTestCase):
++    """Libvirt driver tests for Intel SGX"""
++
++    class Temp(dict):
++
++        def __getattr__(self, key):
++            return self.get(key)
++
++        def __setattr__(self, key, value):
++            self[key] = value
++
++
++    def setUp(self):
++        super(TestLibvirtTDX, self).setUp()
++        self.useFixture(fakelibvirt.FakeLibvirtFixture())
++        self.driver = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), True)
++
++    @mock.patch('nova.virt.libvirt.host.Host.supports_intel_tdx',
++                new=mock.Mock(return_value=True))
++    def test_get_host_tdx_config(self):
++        self.flags(num_memory_encrypted_guests_tdx=128, group='libvirt')
++        self.assertEqual(128, self.driver._get_memory_encrypted_slots_tdx())
++
++    def test_guest_add_tdx(self):
++        guest_tmp = self.Temp({'tdx': None})
++        result = self.driver._guest_add_tdx(guest_tmp,  None)
++        _str = 'host,-kvm-steal-time'
++        self.assertTrue(_str in guest_tmp.tdx.arguments)
++
++    def test_guest_add_tdx_vsock(self):
++        guest = vconfig.LibvirtConfigGuest()
++        result = self.driver._guest_add_tdx(guest, "vsock")
++        _str = 'host,-kvm-steal-time'
++        self.assertTrue(_str in guest.tdx.arguments)
++        self.assertIn(vconfig.LibvirtConfigGuestDeviceVsock, \
++                    [type(item) for item in guest.devices])
++
++    def test_guest_add_tdx_vsock_input_error(self):
++        guest = vconfig.LibvirtConfigGuest()
++        result = self.driver._guest_add_tdx(guest, "test_format_error")
++        _str = 'host,-kvm-steal-time'
++        self.assertTrue(_str in guest.tdx.arguments)
++        self.assertTrue(len(guest.devices)==0)
++
++    def test_guest_add_tdx_launch_security(self):
++        guest = vconfig.LibvirtConfigGuest()
++        ra_type = 'tdvmcall'
++        result = self.driver._guest_add_tdx_launch_security(guest, ra_type)
++        self.assertTrue(isinstance(guest.launch_security,
++                       vconfig.LibvirtConfigGuestTDXLaunchSecurity))
++        dom = guest.launch_security.to_xml()
++        _str = 'vsock:2:4050'
++        self.assertTrue(_str in dom)
++
++    def test_guest_add_tdx_launch_security_input_error(self):
++        guest = vconfig.LibvirtConfigGuest()
++        ra_type = 'test_format_error'
++        result = self.driver._guest_add_tdx_launch_security(guest, ra_type)
++        self.assertTrue(isinstance(guest.launch_security,
++                       vconfig.LibvirtConfigGuestTDXLaunchSecurity))
++        dom = guest.launch_security.to_xml()
++        _str = 'vsock:2:4050'
++        self.assertFalse(_str in dom)
++
++    @mock.patch('nova.virt.libvirt.driver.LibvirtDriver._tdx_enabled',
++            new=mock.Mock(return_value=True))
++    def test_guest_tdx_set_features(self):
++        guest = vconfig.LibvirtConfigGuest()
++        flavor = self.Temp(
++            {'extra_specs': {
++                'hide_hypervisor_id': 1}
++            }
++        )
++        image = self.Temp(
++            {'properties': {
++                'hide_hypervisor_id': 1}
++            }
++        )
++        result = self.driver._set_features(guest, "","","kvm",image,flavor)
++        self.assertIn(vconfig.LibvirtConfigGuestFeatureIOAPIC, \
++                      [type(item) for item in guest.features])
++
++    @mock.patch('nova.virt.libvirt.driver.LibvirtDriver._tdx_enabled',
++            new=mock.Mock(return_value=True))
++    def test_guest_tdx_memory_backing(self):
++        flavor = self.Temp(
++            {'extra_specs': {}
++            }
++        )
++        image = self.Temp(
++            {'properties': {}
++            }
++        )
++        result = self.driver._get_guest_memory_backing_config(None, None,flavor,image)
++        self.assertTrue(isinstance(result, vconfig.LibvirtConfigGuestMemoryBacking))
+diff --git a/nova/tests/unit/virt/libvirt/test_host.py b/nova/tests/unit/virt/libvirt/test_host.py
+index 893cf6fc23..62eaf8ea76 100644
+--- a/nova/tests/unit/virt/libvirt/test_host.py
++++ b/nova/tests/unit/virt/libvirt/test_host.py
+@@ -1462,3 +1462,45 @@ class TestLibvirtSGXSupport(test.NoDBTestCase):
+                         'sgx-mode64', 'sgx-provisionkey', 'sgx-tokenkey']
+             self.flags(sgx_features=features, group='libvirt')
+             self.assertFalse(self.host.supports_intel_sgx)
++
++
++class TestLibvirtTDXSupport(test.NoDBTestCase):
++    """Libvirt host tests for INTEL SGX."""
++
++    def setUp(self):
++        super(TestLibvirtTDXSupport, self).setUp()
++
++        self.useFixture(fakelibvirt.FakeLibvirtFixture())
++        self.host = host.Host("qemu:///system")
++
++    @mock.patch.object(os.path, 'exists', return_value=False)
++    def test_kernel_parameter_missing(self, fake_exists):
++        self.assertFalse(self.host._kernel_supports_intel_tdx())
++        fake_exists.assert_called_once_with(host.TDX_KERNEL_PARAM_FILE)
++
++    @mock.patch.object(os.path, 'exists', return_value=True)
++    @mock.patch.object(builtins, 'open', mock.mock_open(read_data="Y\n"))
++    def test_kernel_parameter_pass(self, fake_exists):
++        self.assertTrue(self.host._kernel_supports_intel_tdx())
++        fake_exists.assert_called_once_with(host.TDX_KERNEL_PARAM_FILE)
++
++    @mock.patch.object(os.path, 'exists', return_value=True)
++    @mock.patch.object(builtins, 'open', mock.mock_open(read_data="N\n"))
++    def test_kernel_parameter_fail(self, fake_exists):
++        self.assertFalse(self.host._kernel_supports_intel_tdx())
++        fake_exists.assert_called_once_with(host.TDX_KERNEL_PARAM_FILE)
++
++    @mock.patch.object(os.path, 'exists', return_value=True)
++    @mock.patch.object(os.path, 'islink', return_value=True)
++    def test_kernel_parameter_link_fail(self, fake_exists, fake_islink):
++        self.assertFalse(self.host._kernel_supports_intel_tdx())
++        fake_exists.assert_called_once_with(host.TDX_KERNEL_PARAM_FILE)
++        fake_islink.assert_called_once_with(host.TDX_KERNEL_PARAM_FILE)
++
++    @mock.patch.object(os.path, 'exists', return_value=True)
++    @mock.patch.object(os.path, 'islink', return_value=False)
++    @mock.patch.object(builtins, 'open', mock.mock_open(read_data="N\n"))
++    def test_kernel_parameter_link_pass(self, fake_exists, fake_islink):
++        self.assertFalse(self.host._kernel_supports_intel_tdx())
++        fake_exists.assert_called_once_with(host.TDX_KERNEL_PARAM_FILE)
++        fake_islink.assert_called_once_with(host.TDX_KERNEL_PARAM_FILE)
+diff --git a/nova/tests/unit/virt/test_hardware.py b/nova/tests/unit/virt/test_hardware.py
+index 85a3e720b0..c49d11a0da 100644
+--- a/nova/tests/unit/virt/test_hardware.py
++++ b/nova/tests/unit/virt/test_hardware.py
+@@ -4420,3 +4420,197 @@ class SGXRequiredTestCase(test.NoDBTestCase):
+                 image_props[trait_name] = image_epc
+             self._test_get_sgx_trait_constraint(
+                 extra_specs, image_props, assert_func)
++
++class MemEncryptionTDXNotRequiredTestCase(test.NoDBTestCase):
++    def _test_encrypted_memory_support_not_required(self, flavor=None,
++                                                    image_meta=None):
++        if flavor is None:
++            flavor = objects.Flavor(extra_specs={})
++
++        if image_meta is None:
++            image_meta = objects.ImageMeta(properties=objects.ImageMetaProps())
++
++        self.assertFalse(hw.get_mem_encryption_tdx_constraint(flavor, image_meta))
++
++    def test_requirement_disabled(self):
++        self._test_encrypted_memory_support_not_required()
++
++    def test_require_false_extra_spec(self):
++        for extra_spec in ('0', 'false', 'False'):
++            self._test_encrypted_memory_support_not_required(
++                objects.Flavor(extra_specs={'hw:mem_encryption_tdx': extra_spec})
++            )
++
++    def test_require_false_image_prop(self):
++        for image_prop in ('0', 'false', 'False'):
++            self._test_encrypted_memory_support_not_required(
++                image_meta=objects.ImageMeta(
++                    properties=objects.ImageMetaProps(
++                        hw_mem_encryption_tdx=image_prop))
++            )
++
++    def test_require_both_false(self):
++        for extra_spec in ('0', 'false', 'False'):
++            for image_prop in ('0', 'false', 'False'):
++                self._test_encrypted_memory_support_not_required(
++                    objects.Flavor(
++                        extra_specs={'hw:mem_encryption_tdx': extra_spec}),
++                    objects.ImageMeta(
++                        properties=objects.ImageMetaProps(
++                            hw_mem_encryption_tdx=image_prop))
++                )
++
++
++class MemEncryptionTDXFlavorImageConflictTestCase(test.NoDBTestCase):
++    def _test_encrypted_memory_support_conflict(self, extra_spec,
++                                                image_prop_in, image_prop_out):
++        # NOTE(aspiers): hw_mem_encryption image property is a
++        # FlexibleBooleanField, so the result should always be coerced
++        # to a boolean.
++        self.assertIsInstance(image_prop_out, bool)
++
++        flavor_name = 'm1.faketiny'
++        image_name = 'fakecirros'
++        flavor = objects.Flavor(
++            name=flavor_name,
++            extra_specs={'hw:mem_encryption_tdx': extra_spec}
++        )
++        image_meta = objects.ImageMeta(
++            name=image_name,
++            properties=objects.ImageMetaProps(
++                hw_mem_encryption_tdx=image_prop_in)
++        )
++
++        error = (
++            "Flavor %(flavor_name)s has hw:mem_encryption extra spec "
++            "explicitly set to %(flavor_val)s, conflicting with "
++            "image %(image_name)s which has hw_mem_encryption property "
++            "explicitly set to %(image_val)s"
++        )
++        exc = self.assertRaises(
++            exception.FlavorImageConflict,
++            hw.get_mem_encryption_tdx_constraint,
++            flavor, image_meta
++        )
++        error_data = {
++            'flavor_name': flavor_name,
++            'flavor_val': extra_spec,
++            'image_name': image_name,
++            'image_val': image_prop_out,
++        }
++        self.assertEqual(error % error_data, str(exc))
++
++    def test_require_encrypted_memory_support_conflict1(self):
++        for extra_spec in ('0', 'false', 'False'):
++            for image_prop_in in ('1', 'true', 'True'):
++                self._test_encrypted_memory_support_conflict(
++                    extra_spec, image_prop_in, True
++                )
++
++    def test_require_encrypted_memory_support_conflict2(self):
++        for extra_spec in ('1', 'true', 'True'):
++            for image_prop_in in ('0', 'false', 'False'):
++                self._test_encrypted_memory_support_conflict(
++                    extra_spec, image_prop_in, False
++                )
++
++
++class MemEncryptionTDXRequestedInvalidImagePropsTestCase(test.NoDBTestCase):
++    flavor_name = 'flavor_tdx'
++    image_name = 'image_meta_tdx'
++    image_id = '7ec4448e-f3fd-44b1-b172-9a7980f0f29f'
++
++    def _test_encrypted_memory_support_raises(self, enc_extra_spec,
++                                              enc_image_prop, image_props,
++                                              error_data):
++        extra_specs = {}
++        if enc_extra_spec:
++            extra_specs['hw:mem_encryption_tdx'] = enc_extra_spec
++        flavor = objects.Flavor(name=self.flavor_name, extra_specs=extra_specs)
++        if enc_image_prop:
++            image_props['hw_mem_encryption_tdx'] = enc_image_prop
++        image_meta = fake_image_obj(
++            {'id': self.image_id, 'name': self.image_name},
++            {}, image_props)
++        exc = self.assertRaises(self.expected_exception,
++                                hw.get_mem_encryption_tdx_constraint,
++                                flavor, image_meta)
++        self.assertEqual(self.expected_error % error_data, str(exc))
++
++
++class MemEncryptionTDXRequestedWithoutUEFITestCase(
++        MemEncryptionTDXRequestedInvalidImagePropsTestCase):
++    expected_exception = exception.FlavorImageConflict
++    expected_error = (
++        "Memory encryption requested by %(requesters)s but image "
++        "%(image_name)s doesn't have 'hw_firmware_type' property "
++        "set to 'uefi'"
++    )
++
++    def _test_encrypted_memory_support_no_uefi(self, enc_extra_spec,
++                                               enc_image_prop, requesters):
++        error_data = {'requesters': requesters,
++                      'image_name': self.image_name}
++        for image_props in ({},
++                            {'hw_machine_type': 'q35'},
++                            {'hw_firmware_type': 'bios'},
++                            {'hw_machine_type': 'q35',
++                             'hw_firmware_type': 'bios'}):
++            self._test_encrypted_memory_support_raises(enc_extra_spec,
++                                                       enc_image_prop,
++                                                       image_props, error_data)
++
++    def test_flavor_requires_encrypted_memory_support_no_uefi(self):
++        for extra_spec in ('1', 'true', 'True'):
++            self._test_encrypted_memory_support_no_uefi(
++                extra_spec, None,
++                "hw:mem_encryption_tdx extra spec in %s flavor" % self.flavor_name)
++
++    def test_image_requires_encrypted_memory_support_no_uefi(self):
++        for image_prop in ('1', 'true', 'True'):
++            self._test_encrypted_memory_support_no_uefi(
++                None, image_prop,
++                "hw_mem_encryption_tdx property of image %s" % self.image_name)
++
++    def test_flavor_image_require_encrypted_memory_support_no_uefi(self):
++        for extra_spec in ('1', 'true', 'True'):
++            for image_prop in ('1', 'true', 'True'):
++                self._test_encrypted_memory_support_no_uefi(
++                    extra_spec, image_prop,
++                    "hw:mem_encryption_tdx extra spec in %s flavor and "
++                    "hw_mem_encryption_tdx property of image %s"
++                    % (self.flavor_name, self.image_name))
++
++
++class MemEncryptionTDXRequestedWithInvalidMachineTypeTestCase(
++       MemEncryptionTDXRequestedInvalidImagePropsTestCase):
++
++    expected_exception = exception.InvalidMachineType
++    expected_error = (
++        "Machine type '%(mtype)s' is not compatible with image %(image_name)s "
++        "(%(image_id)s): q35 type is required for SEV/TDX to work")
++
++    def _test_encrypted_memory_support_pc(self, enc_extra_spec,
++                                              enc_image_prop):
++        error_data = {'image_id': self.image_id,
++                      'image_name': self.image_name,
++                      'mtype': 'pc'}
++        image_props = {'hw_firmware_type': 'uefi',
++                       'hw_machine_type': 'pc'}
++        self._test_encrypted_memory_support_raises(enc_extra_spec,
++                                                   enc_image_prop,
++                                                   image_props, error_data)
++
++    def test_flavor_requires_encrypted_memory_support_pc(self):
++        for extra_spec in ('1', 'true', 'True'):
++            self._test_encrypted_memory_support_pc(extra_spec, None)
++
++    def test_image_requires_encrypted_memory_support_pc(self):
++        for image_prop in ('1', 'true', 'True'):
++            self._test_encrypted_memory_support_pc(None, image_prop)
++
++    def test_flavor_image_require_encrypted_memory_support_pc(self):
++        for extra_spec in ('1', 'true', 'True'):
++            for image_prop in ('1', 'true', 'True'):
++                self._test_encrypted_memory_support_pc(
++                    extra_spec, image_prop)
+\ No newline at end of file
+diff --git a/nova/utils.py b/nova/utils.py
+index 2212d150b7..9d096ecdd4 100644
+--- a/nova/utils.py
++++ b/nova/utils.py
+@@ -99,6 +99,8 @@ SGX_TRAIT_NAME= "HW_CPU_X86_SGX"
+ SGX_RESOURCE_EPC = ':'.join([XS_RES_PREFIX, SGX_RESOURCE_CLASS])
+ SGX_TRAIT = ':'.join([XS_TRAIT_PREFIX, SGX_TRAIT_NAME])
+ 
++TDX_RESOURCE_CLASS = "CUSTOM_MEM_ENCRYPTION_CONTEXT_TDX"
++
+ if hasattr(inspect, 'getfullargspec'):
+     getargspec = inspect.getfullargspec
+ else:
+diff --git a/nova/virt/hardware.py b/nova/virt/hardware.py
+index cb2c8e2897..a0f8823707 100644
+--- a/nova/virt/hardware.py
++++ b/nova/virt/hardware.py
+@@ -1276,6 +1276,74 @@ def get_mem_encryption_constraint(flavor, image_meta, machine_type=None):
+     LOG.debug("Memory encryption requested by %s", " and ".join(requesters))
+     return True
+ 
++def get_mem_encryption_tdx_constraint(flavor, image_meta, machine_type=None):
++    flavor_mem_enc_str, image_mem_enc = _get_flavor_image_meta(
++        'mem_encryption_tdx', flavor, image_meta)
++
++    flavor_mem_enc = None
++    if flavor_mem_enc_str is not None:
++        flavor_mem_enc = strutils.bool_from_string(flavor_mem_enc_str)
++
++    # Image property is a FlexibleBooleanField, so coercion to a
++    # boolean is handled automatically
++
++    if not flavor_mem_enc and not image_mem_enc:
++        return False
++
++    _check_for_mem_encryption_requirement_conflicts(
++        flavor_mem_enc_str, flavor_mem_enc, image_mem_enc, flavor, image_meta)
++
++    # If we get this far, either the extra spec or image property explicitly
++    # specified a requirement regarding memory encryption, and if both did,
++    # they are asking for the same thing.
++    requesters = []
++    if flavor_mem_enc:
++        requesters.append("hw:mem_encryption_tdx extra spec in %s flavor" %
++                          "flavor_tdx")
++    if image_mem_enc:
++        requesters.append("hw_mem_encryption_tdx property of image %s" %
++                          "image_meta_tdx")
++
++    _check_mem_encryption_uses_uefi_image(requesters, image_meta)
++    _check_mem_encryption_machine_type(image_meta, machine_type)
++
++    LOG.debug("Memory encryption requested by %s", " and ".join(requesters))
++    return True
++
++def get_tdx_remote_attestation_constraint(flavor, image_meta):
++    flavor_remote_attestation, image_remote_attestation = _get_flavor_image_meta(
++        'tdx_ra_type', flavor, image_meta)
++
++    if (flavor_remote_attestation is not None and image_remote_attestation is not None and
++            flavor_remote_attestation != image_remote_attestation):
++        emsg = _(
++            "Flavor %(flavor_name)s has hw:tdx_ra_type extra spec "
++            "explicitly set to %(flavor_val)s, conflicting with "
++            "image %(image_name)s which has hw_tdx_ra_type property "
++            "explicitly set to %(image_val)s"
++        )
++        data = {
++            'flavor_name': flavor.name,
++            'flavor_val': flavor_remote_attestation,
++            'image_name': image_meta.name,
++            'image_val': image_remote_attestation,
++        }
++        raise exception.FlavorImageConflict(emsg % data)
++
++    # If we get this far, either the extra spec or image property explicitly
++    # specified a requirement regarding memory encryption, and if both did,
++    # they are asking for the same thing.
++    requesters = []
++    if flavor_remote_attestation is not None:
++        requesters.append("hw:tdx_ra_type extra spec in %s flavor" %
++                          flavor_remote_attestation)
++    if image_remote_attestation is not None:
++        requesters.append("tdx_ra_type property of image %s" %
++                          image_remote_attestation)
++
++    LOG.debug("tdx_ra_type requested by %s", " and ".join(requesters))
++    ra_type = flavor_remote_attestation if flavor_remote_attestation is not None else image_remote_attestation
++    return ra_type
+ 
+ def _check_for_mem_encryption_requirement_conflicts(
+         flavor_mem_enc_str, flavor_mem_enc, image_mem_enc, flavor, image_meta):
+@@ -1342,7 +1410,7 @@ def _check_mem_encryption_machine_type(image_meta, machine_type=None):
+         raise exception.InvalidMachineType(
+             mtype=mach_type,
+             image_id=image_meta.id, image_name=image_meta.name,
+-            reason=_("q35 type is required for SEV to work"))
++            reason=_("q35 type is required for SEV/TDX to work"))
+ 
+ 
+ def _get_numa_pagesize_constraint(flavor, image_meta):
+diff --git a/nova/virt/libvirt/config.py b/nova/virt/libvirt/config.py
+index d4be341208..2f126b3398 100644
+--- a/nova/virt/libvirt/config.py
++++ b/nova/virt/libvirt/config.py
+@@ -2310,6 +2310,7 @@ class LibvirtConfigGuestMemoryBacking(LibvirtConfigObject):
+         self.sharedaccess = False
+         self.allocateimmediate = False
+         self.discard = False
++        self.private = False
+ 
+     def format_dom(self):
+         root = super(LibvirtConfigGuestMemoryBacking, self).format_dom()
+@@ -2331,7 +2332,8 @@ class LibvirtConfigGuestMemoryBacking(LibvirtConfigObject):
+             root.append(etree.Element("allocation", mode="immediate"))
+         if self.discard:
+             root.append(etree.Element("discard"))
+-
++        if self.private:
++            root.append(etree.Element("source", type="memfd-private"))
+         return root
+ 
+ 
+@@ -2466,6 +2468,18 @@ class LibvirtConfigGuestFeatureAPIC(LibvirtConfigGuestFeature):
+         super(LibvirtConfigGuestFeatureAPIC, self).__init__("apic",
+                                                             **kwargs)
+ 
++class LibvirtConfigGuestFeatureIOAPIC(LibvirtConfigGuestFeature):
++
++    def __init__(self, **kwargs):
++        super(LibvirtConfigGuestFeatureIOAPIC, self).__init__("ioapic",
++                                                                 **kwargs)
++
++    def format_dom(self):
++        root = super(LibvirtConfigGuestFeatureIOAPIC, self).format_dom()
++
++        root.set('driver', 'qemu')
++
++        return root
+ 
+ class LibvirtConfigGuestFeaturePAE(LibvirtConfigGuestFeature):
+ 
+@@ -2566,6 +2580,26 @@ class LibvirtConfigGuestSEVLaunchSecurity(LibvirtConfigObject):
+ 
+         return root
+ 
++class LibvirtConfigGuestTDXLaunchSecurity(LibvirtConfigObject):
++
++    def __init__(self, ra_type, **kwargs):
++        super(LibvirtConfigGuestTDXLaunchSecurity, self).__init__(
++            root_name='launchSecurity', **kwargs)
++
++        self.ra_type = ra_type
++
++    def format_dom(self):
++        root = super(LibvirtConfigGuestTDXLaunchSecurity, self).format_dom()
++
++        root.set('type', 'tdx')
++        policy = etree.Element('policy')
++        policy.text = '0x10000001'  # hardcoded default according to the spec
++        root.append(policy)
++        if self.ra_type == 'tdvmcall':
++            vsock = etree.Element('Quote-Generation-Service')
++            vsock.text = 'vsock:2:4050'
++            root.append(vsock)
++        return root
+ 
+ class LibvirtConfigGuestQemuCommandLine(LibvirtConfigObject):
+ 
+@@ -2595,6 +2629,30 @@ class LibvirtConfigGuestQemuCommandLine(LibvirtConfigObject):
+             cmdline.append(arg)
+         return cmdline
+ 
++class LibvirtConfigGuestDeviceVsock(LibvirtConfigObject):
++
++    def __init__(self, **kwargs):
++        super(LibvirtConfigGuestDeviceVsock, self).__init__(
++            root_name='vsock', **kwargs)
++
++    def format_dom(self):
++        vsock = super(LibvirtConfigGuestDeviceVsock, self).format_dom()
++        vsock.set('model', 'virtio')
++
++        cid = etree.Element('cid')
++        cid.set('auto','yes')
++        cid.set('address','3')
++        vsock.append(cid)
++
++        address = etree.Element('address')
++        address.set('type','pci')
++        address.set('domain','0x0000')
++        address.set('bus','0x05')
++        address.set('slot','0x00')
++        address.set('function','0x0')
++        vsock.append(address)
++
++        return vsock
+ 
+ class LibvirtConfigGuest(LibvirtConfigObject):
+ 
+@@ -2636,6 +2694,7 @@ class LibvirtConfigGuest(LibvirtConfigObject):
+         self.perf_events = []
+         self.launch_security = None
+         self.sgx = None
++        self.tdx = None
+ 
+     def _format_basic_props(self, root):
+         root.append(self._text_node("uuid", self.uuid))
+@@ -2740,6 +2799,10 @@ class LibvirtConfigGuest(LibvirtConfigObject):
+         if self.sgx is not None:
+             root.append(self.sgx.format_dom())
+ 
++    def _format_tdx(self, root):
++        if self.tdx is not None:
++            root.append(self.tdx.format_dom())
++
+     def format_dom(self):
+         root = super(LibvirtConfigGuest, self).format_dom()
+ 
+@@ -2772,6 +2835,8 @@ class LibvirtConfigGuest(LibvirtConfigObject):
+ 
+         self._format_sgx(root)
+ 
++        self._format_tdx(root)
++
+         return root
+ 
+     def _parse_basic_props(self, xmldoc):
+diff --git a/nova/virt/libvirt/driver.py b/nova/virt/libvirt/driver.py
+index 36ce49c779..df0d19c6d4 100644
+--- a/nova/virt/libvirt/driver.py
++++ b/nova/virt/libvirt/driver.py
+@@ -5140,6 +5140,8 @@ class LibvirtDriver(driver.ComputeDriver):
+                 (virt_type == "xen" and guest.os_type == fields.VMMode.HVM)):
+             guest.features.append(vconfig.LibvirtConfigGuestFeatureACPI())
+             guest.features.append(vconfig.LibvirtConfigGuestFeatureAPIC())
++            if self._tdx_enabled(flavor, image_meta):
++                guest.features.append(vconfig.LibvirtConfigGuestFeatureIOAPIC())
+ 
+         if (virt_type in ("qemu", "kvm") and
+                 os_type == 'windows'):
+@@ -5334,7 +5336,10 @@ class LibvirtDriver(driver.ComputeDriver):
+             if not membacking:
+                 membacking = vconfig.LibvirtConfigGuestMemoryBacking()
+             membacking.locked = True
+-
++        if self._tdx_enabled(flavor, image_meta):
++            if not membacking:
++                membacking = vconfig.LibvirtConfigGuestMemoryBacking()
++            membacking.private = True
+         return membacking
+ 
+     def _get_memory_backing_hugepages_support(self, inst_topology, numatune):
+@@ -5464,12 +5469,18 @@ class LibvirtDriver(driver.ComputeDriver):
+                                     "functional testing and therefore "
+                                     "considered experimental.")
+                         uefi_logged = True
+-                    for lpath in DEFAULT_UEFI_LOADER_PATH[caps.host.cpu.arch]:
+-                        if os.path.exists(lpath):
+-                            guest.os_loader = lpath
+-                    guest.os_loader_type = "pflash"
++
++                    if self._tdx_enabled(flavor, image_meta):
++                        guest.os_loader = "/usr/share/qemu/OVMF.fd"
++                        guest.os_loader_type = "rom"
++                    else:
++                        for lpath in DEFAULT_UEFI_LOADER_PATH[caps.host.cpu.arch]:
++                            if os.path.exists(lpath):
++                                guest.os_loader = lpath
++                        guest.os_loader_type = "pflash"
+                 else:
+                     raise exception.UEFINotSupported()
++
+             guest.os_mach_type = libvirt_utils.get_machine_type(image_meta)
+             if image_meta.properties.get('hw_boot_menu') is None:
+                 guest.os_bootmenu = strutils.bool_from_string(
+@@ -5544,8 +5555,13 @@ class LibvirtDriver(driver.ComputeDriver):
+                 self._create_serial_consoles(guest_cfg, num_ports,
+                                              char_dev_cls, log_path)
+         else:
+-            self._create_pty_device(guest_cfg, char_dev_cls,
+-                                    log_path=log_path)
++            if self._tdx_enabled(flavor, image_meta):
++                char_dev_cls = vconfig.LibvirtConfigGuestConsole
++                self._create_virtio_device(guest_cfg, char_dev_cls,
++                                        log_path=log_path)
++            else:
++                self._create_pty_device(guest_cfg, char_dev_cls,
++                            log_path=log_path)
+ 
+     def _create_consoles_s390x(self, guest_cfg, instance, flavor, image_meta):
+         char_dev_cls = vconfig.LibvirtConfigGuestConsole
+@@ -5560,6 +5576,19 @@ class LibvirtDriver(driver.ComputeDriver):
+             self._create_pty_device(guest_cfg, char_dev_cls,
+                                     "sclp", log_path)
+ 
++    def _create_virtio_device(self, guest_cfg, char_dev_cls, target_type=None,
++                           log_path=None):
++
++        consolepty = char_dev_cls()
++        consolepty.target_type = "virtio"
++        consolepty.target_port = 0
++
++        log = vconfig.LibvirtConfigGuestCharDeviceLog()
++        log.file = log_path
++        consolepty.log = log
++
++        guest_cfg.add_device(consolepty)
++
+     def _create_pty_device(self, guest_cfg, char_dev_cls, target_type=None,
+                            log_path=None):
+ 
+@@ -5805,6 +5834,9 @@ class LibvirtDriver(driver.ComputeDriver):
+         caps = self._host.get_capabilities()
+ 
+         sev_enabled = self._sev_enabled(flavor, image_meta)
++        tdx_enabled = self._tdx_enabled(flavor, image_meta)
++        tdx_ra_type = self._tdx_remote_attestation_type(flavor, image_meta, tdx_enabled)
++
+ 
+         self._configure_guest_by_virt_type(guest, virt_type, caps, instance,
+                                            image_meta, flavor,
+@@ -5837,16 +5869,17 @@ class LibvirtDriver(driver.ComputeDriver):
+ 
+         self._guest_add_spice_channel(guest)
+ 
+-        if self._guest_add_video_device(guest):
+-            self._add_video_driver(guest, image_meta, flavor)
++        if not tdx_enabled:
++            if self._guest_add_video_device(guest):
++                self._add_video_driver(guest, image_meta, flavor)
+ 
+-            # We want video == we want graphical console. Some architectures
+-            # do not have input devices attached in default configuration.
+-            # Let then add USB Host controller and USB keyboard.
+-            # x86(-64) and ppc64 have usb host controller and keyboard
+-            # s390x does not support USB
+-            if caps.host.cpu.arch == fields.Architecture.AARCH64:
+-                self._guest_add_usb_host_keyboard(guest)
++                # We want video == we want graphical console. Some architectures
++                # do not have input devices attached in default configuration.
++                # Let then add USB Host controller and USB keyboard.
++                # x86(-64) and ppc64 have usb host controller and keyboard
++                # s390x does not support USB
++                if caps.host.cpu.arch == fields.Architecture.AARCH64:
++                    self._guest_add_usb_host_keyboard(guest)
+ 
+         # Qemu guest agent only support 'qemu' and 'kvm' hypervisor
+         if virt_type in ('qemu', 'kvm'):
+@@ -5871,6 +5904,10 @@ class LibvirtDriver(driver.ComputeDriver):
+         if self._host.supports_intel_sgx:
+             self._guest_add_sgx(guest, flavor, image_meta)
+ 
++        if tdx_enabled:
++            self._guest_add_tdx(guest, tdx_ra_type)
++            self._guest_add_tdx_launch_security(guest, tdx_ra_type)
++
+         if vpmems:
+             self._guest_add_vpmems(guest, vpmems)
+ 
+@@ -5947,6 +5984,18 @@ class LibvirtDriver(driver.ComputeDriver):
+         return hardware.get_mem_encryption_constraint(flavor, image_meta,
+                                                       mach_type)
+ 
++    def _tdx_enabled(self, flavor, image_meta):
++        if not self._host.supports_intel_tdx:
++            return False
++        mach_type = libvirt_utils.get_machine_type(image_meta)
++        return hardware.get_mem_encryption_tdx_constraint(flavor, image_meta,
++                                                      mach_type)
++
++    def _tdx_remote_attestation_type(self, flavor, image_meta, tdx_enabled):
++        if not tdx_enabled:
++            return None
++        return hardware.get_tdx_remote_attestation_constraint(flavor, image_meta)
++
+     def _get_guest_sgx_epc_mb(self, flavor):
+         """Size of sgx epc memory is determined by
+         `resources:CUSTOM_SGX_EPC_MB` specified in flavor extra_spec.
+@@ -5996,10 +6045,26 @@ class LibvirtDriver(driver.ComputeDriver):
+                 'memory-backend-epc,id=mem1,size=%dM,'
+                 'prealloc=on' % sgx_epc_mb,
+                 '-M',
+-                'sgx-epc.0.memdev=mem1'
++                'sgx-epc.0.memdev=mem1,sgx-epc.0.node=0'
+             ]
+             guest.sgx = sgx_qemu_commandline
+ 
++    def _guest_add_tdx(self, guest, tdx_ra_type):
++        tdx_qemu_commandline = vconfig.LibvirtConfigGuestQemuCommandLine()
++        tdx_qemu_commandline.arguments = [
++            '-cpu',
++            'host,-kvm-steal-time'
++        ]
++        guest.tdx = tdx_qemu_commandline
++        if tdx_ra_type == "vsock":
++            vsock = vconfig.LibvirtConfigGuestDeviceVsock()
++            guest.add_device(vsock)
++
++
++    def _guest_add_tdx_launch_security(self, guest, ra_type):
++        launch_security = vconfig.LibvirtConfigGuestTDXLaunchSecurity(ra_type)
++        guest.launch_security = launch_security
++
+     def _find_sev_feature(self, arch, mach_type):
+         """Search domain capabilities for the given arch and machine type
+         for the <sev> element under <features>, and return it if found.
+@@ -7394,6 +7459,7 @@ class LibvirtDriver(driver.ComputeDriver):
+         vcpus = len(self._get_vcpu_available())
+         pcpus = len(self._get_pcpu_available())
+         memory_enc_slots = self._get_memory_encrypted_slots()
++        memory_enc_slots_tdx = self._get_memory_encrypted_slots_tdx()
+         sgx_epc_mb = self._get_host_sgx_epc_mb()
+ 
+         # NOTE(yikun): If the inv record does not exists, the allocation_ratio
+@@ -7446,6 +7512,16 @@ class LibvirtDriver(driver.ComputeDriver):
+                 'reserved': 0,
+             }
+ 
++        if memory_enc_slots_tdx:
++            result[utils.TDX_RESOURCE_CLASS] = {
++                'total': memory_enc_slots_tdx,
++                'min_unit': 1,
++                'max_unit': 1,
++                'step_size': 1,
++                'allocation_ratio': 1.0,
++                'reserved': 0,
++            }
++
+         if sgx_epc_mb:
+             result[utils.SGX_RESOURCE_CLASS] = {
+                 'total': sgx_epc_mb,
+@@ -7554,6 +7630,20 @@ class LibvirtDriver(driver.ComputeDriver):
+         else:
+             return db_const.MAX_INT
+ 
++    def _get_memory_encrypted_slots_tdx(self):
++        slots = CONF.libvirt.num_memory_encrypted_guests_tdx
++        if not self._host.supports_intel_tdx:
++            if slots and slots > 0:
++                LOG.warning("Host is configured with "
++                            "libvirt.num_memory_encrypted_guests_tdx set to "
++                            "%d, but is not tdx-capable.", slots)
++            return 0
++        if slots is not None:
++            return slots
++        else:
++            return db_const.MAX_INT
++
++
+     def _get_host_sgx_epc_mb(self):
+         if not self._host.supports_intel_sgx:
+             return 0
+diff --git a/nova/virt/libvirt/host.py b/nova/virt/libvirt/host.py
+index 519999ac8e..3309fa3106 100644
+--- a/nova/virt/libvirt/host.py
++++ b/nova/virt/libvirt/host.py
+@@ -78,6 +78,7 @@ HV_DRIVER_XEN = "Xen"
+ 
+ SEV_KERNEL_PARAM_FILE = '/sys/module/kvm_amd/parameters/sev'
+ SGX_KERNEL_PARAM_FILE = '/sys/module/kvm_intel/parameters/sgx'
++TDX_KERNEL_PARAM_FILE = '/sys/module/kvm_intel/parameters/tdx'
+ 
+ class Host(object):
+ 
+@@ -119,6 +120,7 @@ class Host(object):
+         # memoized by the supports_amd_sev property below.
+         self._supports_amd_sev = None
+         self._supports_intel_sgx = None
++        self._supports_intel_tdx = None
+ 
+         self._has_hyperthreading = None
+ 
+@@ -1246,6 +1248,20 @@ class Host(object):
+             LOG.debug("%s contains [%s]", SGX_KERNEL_PARAM_FILE, contents)
+             return contents == "Y\n"
+ 
++    def _kernel_supports_intel_tdx(self):
++        if not os.path.exists(TDX_KERNEL_PARAM_FILE):
++            LOG.debug("%s does not exist", TDX_KERNEL_PARAM_FILE)
++            return False
++
++        if os.path.islink(TDX_KERNEL_PARAM_FILE):
++            LOG.error("%s is a soft link file", TDX_KERNEL_PARAM_FILE)
++            return False
++
++        with open(TDX_KERNEL_PARAM_FILE) as f:
++            contents = f.read()
++            LOG.debug("%s contains [%s]", TDX_KERNEL_PARAM_FILE, contents)
++            return contents == "Y\n"
++
+     @property
+     def supports_amd_sev(self):
+         """Returns a boolean indicating whether AMD SEV (Secure Encrypted
+@@ -1272,6 +1288,16 @@ class Host(object):
+             self._set_intel_sgx_support()
+         return self._supports_intel_sgx
+ 
++    @property
++    def supports_intel_tdx(self):
++        """Returns a boolean indicating whether INTEL TDX (Trust Domain Extensions)
++        is supported. This is conditional on support
++        in the hardware, kernel, qemu, and libvirt.
++        """
++        if self._supports_intel_tdx is None:
++            self._set_intel_tdx_support()
++        return self._supports_intel_tdx
++
+     def _set_amd_sev_support(self):
+         self._supports_amd_sev = False
+ 
+@@ -1310,3 +1336,12 @@ class Host(object):
+             return
+ 
+         self._supports_intel_sgx = True
++
++    def _set_intel_tdx_support(self):
++        self._supports_intel_tdx = False
++
++        if not self._kernel_supports_intel_tdx():
++            LOG.info("Kernel doesn't support INTEL TDX")
++            return
++
++        self._supports_intel_tdx = True
+-- 
+2.31.1
+

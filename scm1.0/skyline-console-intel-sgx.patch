@@ -1,0 +1,928 @@
+From e876a1f8d7b4aee64602be27552f8d31d1701d77 Mon Sep 17 00:00:00 2001
+From: xusongfu <xu.songfu@99cloud.net>
+Date: Thu, 26 May 2022 18:22:14 +0800
+Subject: [PATCH 1/4] [Animbus]feat: Support SGX
+
+Suport SGX for intel
+
+Issue: 133858
+---
+ config/webpack.dev.js                         |  2 +-
+ src/locales/en.json                           |  8 ++++
+ src/locales/zh.json                           |  8 ++++
+ .../Overview/components/QuotaOverview.jsx     |  7 ++-
+ .../Flavor/BareMetal/actions/index.jsx        |  4 ++
+ .../Flavor/Heterogeneous/actions/index.jsx    |  4 ++
+ .../containers/Flavor/X86/actions/index.jsx   |  4 ++
+ .../Flavor/actions/ManageMetadata.jsx         |  1 +
+ .../Hypervisors/Hypervisor/Detail/index.jsx   | 10 ++++-
+ .../Instance/actions/LiveMigrate.jsx          |  5 +--
+ .../containers/Instance/actions/Migrate.jsx   | 12 ++---
+ .../Project/actions/QuotaManager.jsx          | 15 +++++--
+ src/resources/nova/hypervisor.jsx             | 45 +++++++++++++++++++
+ src/stores/keystone/project.js                |  2 +
+ src/stores/nova/hypervisor.js                 | 30 ++++++++-----
+ 15 files changed, 132 insertions(+), 25 deletions(-)
+
+diff --git a/config/webpack.dev.js b/config/webpack.dev.js
+index 0552b56..df533e5 100644
+--- a/config/webpack.dev.js
++++ b/config/webpack.dev.js
+@@ -31,7 +31,7 @@ module.exports = (env) => {
+   const devServer = {
+     host: '0.0.0.0',
+     // host: 'localhost',
+-    port: 8088,
++    port: 8089,
+     contentBase: root('dist'),
+     historyApiFallback: true,
+     compress: true,
+diff --git a/src/locales/en.json b/src/locales/en.json
+index b586b32..8eb2a0e 100644
+--- a/src/locales/en.json
++++ b/src/locales/en.json
+@@ -1075,6 +1075,8 @@
+   "If nova-compute on the host is disabled, it will be forbidden to be selected as the target host.": "If nova-compute on the host is disabled, it will be forbidden to be selected as the target host.",
+   "If set then all tenants will be able to see this share.": "If set then all tenants will be able to see this share.",
+   "If the capacity of the disk is large,the type modify operation may takes several hours. Please be cautious.": "If the capacity of the disk is large,the type modify operation may takes several hours. Please be cautious.",
++  "If the instance executes SGX ENCLAVE computing tasks, these tasks will not be executed after migration.": "If the instance executes SGX ENCLAVE computing tasks, these tasks will not be executed after migration.",
++  "If the instance executes SGX ENCLAVE computing tasks, unable to migrate to a target host that does not support SGX services.": "If the instance executes SGX ENCLAVE computing tasks, unable to migrate to a target host that does not support SGX services.",
+   "If the volume associated with the snapshot has changed the volume type, please modify this option manually; if the volume associated with the snapshot keeps the volume type unchanged, please ignore this option. (no need to change).": "If the volume associated with the snapshot has changed the volume type, please modify this option manually; if the volume associated with the snapshot keeps the volume type unchanged, please ignore this option. (no need to change).",
+   "If you are not authorized to access any project, or if the project you are involved in has been deleted or disabled, contact the platform administrator to reassign the project": "If you are not authorized to access any project, or if the project you are involved in has been deleted or disabled, contact the platform administrator to reassign the project",
+   "If you choose a port which subnet is different from the subnet of LB, please ensure connectivity between the two.": "If you choose a port which subnet is different from the subnet of LB, please ensure connectivity between the two.",
+@@ -1373,6 +1375,8 @@
+   "Member in group": "Member in group",
+   "Members": "Members",
+   "Memory": "Memory",
++  "Memory (GiB)": "Memory (GiB)",
++  "Memory (MiB)": "Memory (MiB)",
+   "Memory Optimized": "Memory Optimized",
+   "Memory Page": "Memory Page",
+   "Memory Page Size": "Memory Page Size",
+@@ -1913,6 +1917,9 @@
+   "Russia": "Russia",
+   "Rwanda": "Rwanda",
+   "SCTP": "SCTP",
++  "SGX": "SGX",
++  "SGX EPC": "SGX EPC",
++  "SGX EPC (MiB)": "SGX EPC (MiB)",
+   "SNAT Enabled": "SNAT Enabled",
+   "SNI Certificate": "SNI Certificate",
+   "SNI Enabled": "SNI Enabled",
+@@ -2467,6 +2474,7 @@
+   "When the computing service starts the recycling instance interval, the instance will be stored in the recycling bin after deletion, and will be retained according to the corresponding time interval. You can choose to restore it within this period. After successful recovery, the status of the instance is running and related resources remain unchanged.": "When the computing service starts the recycling instance interval, the instance will be stored in the recycling bin after deletion, and will be retained according to the corresponding time interval. You can choose to restore it within this period. After successful recovery, the status of the instance is running and related resources remain unchanged.",
+   "When the volume is \"bootable\" and the status is \"available\", it can be used as a startup source to create an instance.": "When the volume is \"bootable\" and the status is \"available\", it can be used as a startup source to create an instance.",
+   "When you do online backup of the volume that has been bound, you need to pay attention to the following points:": "When you do online backup of the volume that has been bound, you need to pay attention to the following points:",
++  "When you migrate a instance, you need to pay attention the following conditions:": "When you migrate a instance, you need to pay attention the following conditions:",
+   "When you restore a backup, you need to meet one of the following conditions:": "When you restore a backup, you need to meet one of the following conditions:",
+   "When your Yaml file is a fixed template, variable variables can be stored in an environment variable file to implement template deployment. The parameters in the environment variable file need to match the parameters defined in the template file.": "When your Yaml file is a fixed template, variable variables can be stored in an environment variable file to implement template deployment. The parameters in the environment variable file need to match the parameters defined in the template file.",
+   "Whether the Login Name can be used is up to the feasible configuration of cloud-init or cloudbase-init service in the image.": "Whether the Login Name can be used is up to the feasible configuration of cloud-init or cloudbase-init service in the image.",
+diff --git a/src/locales/zh.json b/src/locales/zh.json
+index 389f26e..c93d810 100644
+--- a/src/locales/zh.json
++++ b/src/locales/zh.json
+@@ -1075,6 +1075,8 @@
+   "If nova-compute on the host is disabled, it will be forbidden to be selected as the target host.": "如果计算节点上的nova-compute被禁用，将禁止其作为目标节点。",
+   "If set then all tenants will be able to see this share.": "如果设置，则所有租户都将能够看到此共享。",
+   "If the capacity of the disk is large,the type modify operation may takes several hours. Please be cautious.": "如果云硬盘容量较大，修改云硬盘类型可能需要花费几个小时，请您谨慎操作。",
++  "If the instance executes SGX ENCLAVE computing tasks, these tasks will not be executed after migration.": "如果该虚拟机执行SGX ENCLAVE计算任务，迁移后这些任务将无法被执行。",
++  "If the instance executes SGX ENCLAVE computing tasks, unable to migrate to a target host that does not support SGX services.": "如果该虚拟机执行SGX ENCLAVE计算任务，无法迁移到不支持SGX服务的目标节点。",
+   "If the volume associated with the snapshot has changed the volume type, please modify this option manually; if the volume associated with the snapshot keeps the volume type unchanged, please ignore this option. (no need to change).": "若快照关联的云硬盘修改过云硬盘类型，请手动修改此选项；若快照关联的云硬盘保持云硬盘类型不变，请忽略此选项（不需要做变更）。",
+   "If you are not authorized to access any project, or if the project you are involved in has been deleted or disabled, contact the platform administrator to reassign the project": "您未被授权访问任何项目，或您参与中的项目已被删除或禁用，可联系平台管理员重新分配项目",
+   "If you choose a port which subnet is different from the subnet of LB, please ensure connectivity between the two.": "如果你选择了和LB子网不同的网卡，请确保两者的连通性。",
+@@ -1373,6 +1375,8 @@
+   "Member in group": "组内成员",
+   "Members": "成员",
+   "Memory": "内存",
++  "Memory (GiB)": "内存 (GiB)",
++  "Memory (MiB)": "内存 (MiB)",
+   "Memory Optimized": "内存型",
+   "Memory Page": "内存页",
+   "Memory Page Size": "内存页大小",
+@@ -1913,6 +1917,9 @@
+   "Russia": "俄罗斯",
+   "Rwanda": "卢旺达",
+   "SCTP": "",
++  "SGX": "SGX",
++  "SGX EPC": "SGX EPC",
++  "SGX EPC (MiB)": "SGX EPC (MiB)",
+   "SNAT Enabled": "启用SNAT",
+   "SNI Certificate": "SNI证书",
+   "SNI Enabled": "SNI开启",
+@@ -2467,6 +2474,7 @@
+   "When the computing service starts the recycling instance interval, the instance will be stored in the recycling bin after deletion, and will be retained according to the corresponding time interval. You can choose to restore it within this period. After successful recovery, the status of the instance is running and related resources remain unchanged.": "当计算服务开启回收实例间隔时，删除后云主机会存放在回收站，按对应的时间间隔保留，在此期限内可以选择恢复。恢复成功后的云主机状态为运行中，且相关资源保持不变。",
+   "When the volume is \"bootable\" and the status is \"available\", it can be used as a startup source to create an instance.": "云硬盘为“可启用”并且状态为“可用”时，可以作为启动源来创建云主机。",
+   "When you do online backup of the volume that has been bound, you need to pay attention to the following points:": "当您对已经绑定的硬盘做在线备份时，需要注意以下几点：",
++  "When you migrate a instance, you need to pay attention the following conditions:": "迁移实例时，需要注意以下几个条件：",
+   "When you restore a backup, you need to meet one of the following conditions:": "当您恢复备份时，需要满足以下条件之一：",
+   "When your Yaml file is a fixed template, variable variables can be stored in an environment variable file to implement template deployment. The parameters in the environment variable file need to match the parameters defined in the template file.": "当您的Yaml文件为一个固定模版时，可变变量可以存放在环境变量文件中来实现模版部署，环境变量文件中的参数需要与模版文件中定义的参数保持匹配。",
+   "Whether the Login Name can be used is up to the feasible configuration of cloud-init or cloudbase-init service in the image.": "用户名是否可登录取决于镜像中的cloud-init或cloudbase-init服务的预制配置",
+diff --git a/src/pages/base/containers/Overview/components/QuotaOverview.jsx b/src/pages/base/containers/Overview/components/QuotaOverview.jsx
+index 42ed543..a195a8e 100644
+--- a/src/pages/base/containers/Overview/components/QuotaOverview.jsx
++++ b/src/pages/base/containers/Overview/components/QuotaOverview.jsx
+@@ -34,7 +34,7 @@ export const quotaCardList = [
+     value: [
+       { text: t('Instances'), key: 'instances' },
+       { text: t('vCPUs'), key: 'cores' },
+-      { text: t('Memory'), key: 'ram' },
++      { text: t('Memory (GiB)'), key: 'ram' },
+       { text: t('Key Pair'), key: 'key_pairs' },
+       { text: t('Server Group'), key: 'server_groups' },
+     ],
+@@ -78,6 +78,11 @@ export const quotaCardList = [
+       { text: t('Security Group Rule'), key: 'security_group_rule' },
+     ],
+   },
++  {
++    text: t('SGX EPC'),
++    type: 'sgx',
++    value: [{ text: t('Memory (MiB)'), key: 'sgx_epc' }],
++  },
+ ];
+ 
+ export const shareQuotaCard = {
+diff --git a/src/pages/compute/containers/Flavor/BareMetal/actions/index.jsx b/src/pages/compute/containers/Flavor/BareMetal/actions/index.jsx
+index 9acd668..5f2d407 100644
+--- a/src/pages/compute/containers/Flavor/BareMetal/actions/index.jsx
++++ b/src/pages/compute/containers/Flavor/BareMetal/actions/index.jsx
+@@ -16,6 +16,7 @@ import CreateAction from './Create';
+ // import EditAction from './Edit';
+ import DeleteAction from '../../actions/Delete';
+ import ManageAccess from '../../actions/ManageAccess';
++import ManageMetadata from '../../actions/ManageMetadata';
+ 
+ const actionConfigs = {
+   rowActions: {
+@@ -25,6 +26,9 @@ const actionConfigs = {
+       {
+         action: ManageAccess,
+       },
++      {
++        action: ManageMetadata,
++      },
+     ],
+   },
+   batchActions: [DeleteAction],
+diff --git a/src/pages/compute/containers/Flavor/Heterogeneous/actions/index.jsx b/src/pages/compute/containers/Flavor/Heterogeneous/actions/index.jsx
+index 9acd668..5f2d407 100644
+--- a/src/pages/compute/containers/Flavor/Heterogeneous/actions/index.jsx
++++ b/src/pages/compute/containers/Flavor/Heterogeneous/actions/index.jsx
+@@ -16,6 +16,7 @@ import CreateAction from './Create';
+ // import EditAction from './Edit';
+ import DeleteAction from '../../actions/Delete';
+ import ManageAccess from '../../actions/ManageAccess';
++import ManageMetadata from '../../actions/ManageMetadata';
+ 
+ const actionConfigs = {
+   rowActions: {
+@@ -25,6 +26,9 @@ const actionConfigs = {
+       {
+         action: ManageAccess,
+       },
++      {
++        action: ManageMetadata,
++      },
+     ],
+   },
+   batchActions: [DeleteAction],
+diff --git a/src/pages/compute/containers/Flavor/X86/actions/index.jsx b/src/pages/compute/containers/Flavor/X86/actions/index.jsx
+index 9acd668..5f2d407 100644
+--- a/src/pages/compute/containers/Flavor/X86/actions/index.jsx
++++ b/src/pages/compute/containers/Flavor/X86/actions/index.jsx
+@@ -16,6 +16,7 @@ import CreateAction from './Create';
+ // import EditAction from './Edit';
+ import DeleteAction from '../../actions/Delete';
+ import ManageAccess from '../../actions/ManageAccess';
++import ManageMetadata from '../../actions/ManageMetadata';
+ 
+ const actionConfigs = {
+   rowActions: {
+@@ -25,6 +26,9 @@ const actionConfigs = {
+       {
+         action: ManageAccess,
+       },
++      {
++        action: ManageMetadata,
++      },
+     ],
+   },
+   batchActions: [DeleteAction],
+diff --git a/src/pages/compute/containers/Flavor/actions/ManageMetadata.jsx b/src/pages/compute/containers/Flavor/actions/ManageMetadata.jsx
+index 393237a..04ba925 100644
+--- a/src/pages/compute/containers/Flavor/actions/ManageMetadata.jsx
++++ b/src/pages/compute/containers/Flavor/actions/ManageMetadata.jsx
+@@ -144,6 +144,7 @@ export class ManageMetadata extends ModalAction {
+         name: 'customs',
+         label: t('Custom Metadata'),
+         type: 'add-select',
++        keySpan: 8,
+         itemComponent: KeyValueInput,
+         addText: t('Add Custom Metadata'),
+         validator: (rule, value) => {
+diff --git a/src/pages/compute/containers/Hypervisors/Hypervisor/Detail/index.jsx b/src/pages/compute/containers/Hypervisors/Hypervisor/Detail/index.jsx
+index de430ff..052fc79 100644
+--- a/src/pages/compute/containers/Hypervisors/Hypervisor/Detail/index.jsx
++++ b/src/pages/compute/containers/Hypervisors/Hypervisor/Detail/index.jsx
+@@ -71,7 +71,8 @@ export class HypervisorDetail extends Base {
+           ),
+       },
+     ];
+-    const { vgpus, vgpus_used } = this.store.detail;
++    const { vgpus, vgpus_used, sgx_enabled, sgx_epc, sgx_epc_used } =
++      this.store.detail;
+     if (vgpus) {
+       info.push({
+         title: t('VGPU (Core)'),
+@@ -79,6 +80,13 @@ export class HypervisorDetail extends Base {
+         render: () => `${vgpus_used} / ${vgpus}`,
+       });
+     }
++    if (sgx_enabled) {
++      info.push({
++        title: t('SGX EPC (MiB)'),
++        dataIndex: 'sgx_epc',
++        render: () => `${sgx_epc_used} / ${sgx_epc}`,
++      });
++    }
+     return info;
+   }
+ 
+diff --git a/src/pages/compute/containers/Instance/actions/LiveMigrate.jsx b/src/pages/compute/containers/Instance/actions/LiveMigrate.jsx
+index 60f3473..2905a2b 100644
+--- a/src/pages/compute/containers/Instance/actions/LiveMigrate.jsx
++++ b/src/pages/compute/containers/Instance/actions/LiveMigrate.jsx
+@@ -25,6 +25,7 @@ import globalHypervisorStore from 'stores/nova/hypervisor';
+ import {
+   hypervisorColumns,
+   hypervisorFilters,
++  liveMigrateTip,
+ } from 'resources/nova/hypervisor';
+ 
+ export class LiveMigrate extends ModalAction {
+@@ -68,9 +69,7 @@ export class LiveMigrate extends ModalAction {
+   }
+ 
+   get tips() {
+-    return t(
+-      'Choose a host to live migrate instance to. If not selected, the scheduler will auto select target host.'
+-    );
++    return liveMigrateTip;
+   }
+ 
+   get defaultValue() {
+diff --git a/src/pages/compute/containers/Instance/actions/Migrate.jsx b/src/pages/compute/containers/Instance/actions/Migrate.jsx
+index 4a3e0b2..9f89086 100644
+--- a/src/pages/compute/containers/Instance/actions/Migrate.jsx
++++ b/src/pages/compute/containers/Instance/actions/Migrate.jsx
+@@ -25,6 +25,7 @@ import globalHypervisorStore from 'stores/nova/hypervisor';
+ import {
+   hypervisorColumns,
+   hypervisorFilters,
++  migrateTip,
+ } from 'resources/nova/hypervisor';
+ 
+ export class LiveMigrate extends ModalAction {
+@@ -68,9 +69,7 @@ export class LiveMigrate extends ModalAction {
+   }
+ 
+   get tips() {
+-    return t(
+-      'Choose a host to migrate instance to. If not selected, the scheduler will auto select target host.'
+-    );
++    return migrateTip;
+   }
+ 
+   get defaultValue() {
+@@ -92,7 +91,8 @@ export class LiveMigrate extends ModalAction {
+     );
+ 
+   get formItems() {
+-    const { host } = this.item;
++    const { host, flavor_info: { extra_specs = {} } = {} } = this.item;
++    const sgx_enabled = extra_specs['trait:HW_CPU_X86_SGX'] === 'required';
+     return [
+       {
+         name: 'instance',
+@@ -119,7 +119,9 @@ export class LiveMigrate extends ModalAction {
+         filterParams: hypervisorFilters,
+         columns: hypervisorColumns,
+         disabledFunc: (record) =>
+-          record.service_host === host || record.status !== 'enabled',
++          record.service_host === host ||
++          record.status !== 'enabled' ||
++          (sgx_enabled && !record.sgx_enabled),
+       },
+     ];
+   }
+diff --git a/src/pages/identity/containers/Project/actions/QuotaManager.jsx b/src/pages/identity/containers/Project/actions/QuotaManager.jsx
+index e20d62b..d4bc98b 100644
+--- a/src/pages/identity/containers/Project/actions/QuotaManager.jsx
++++ b/src/pages/identity/containers/Project/actions/QuotaManager.jsx
+@@ -180,7 +180,8 @@ export class QuotaManager extends ModalAction {
+   get formItems() {
+     const computeFormItems = this.getComputeFormItems();
+     const networkFormItems = this.getFormItemsByCards('networks');
+-    const form = [...computeFormItems, ...networkFormItems];
++    const sgxFormItems = this.getFormItemsByCards('sgx');
++    const form = [...computeFormItems, ...networkFormItems, ...sgxFormItems];
+     if (this.enableShare) {
+       form.push(...this.getFormItemsByCards('share'));
+     }
+@@ -202,8 +203,16 @@ export class QuotaManager extends ModalAction {
+ 
+   getSubmitData(values) {
+     const { id: project_id } = this.item;
+-    const { more, compute, storage, networks, volumeTypes, share, ...others } =
+-      values;
++    const {
++      more,
++      compute,
++      storage,
++      networks,
++      volumeTypes,
++      share,
++      sgx,
++      ...others
++    } = values;
+     return {
+       project_id,
+       data: others,
+diff --git a/src/resources/nova/hypervisor.jsx b/src/resources/nova/hypervisor.jsx
+index 869c240..41edd0a 100644
+--- a/src/resources/nova/hypervisor.jsx
++++ b/src/resources/nova/hypervisor.jsx
+@@ -25,6 +25,11 @@ export const hypervisorColumns = [
+     title: t('Type'),
+     dataIndex: 'hypervisor_type',
+   },
++  {
++    title: t('SGX'),
++    dataIndex: 'sgx_enabled',
++    render: (value) => (value ? t('Enabled') : '-'),
++  },
+   {
+     title: t('VCPU (Core)'),
+     dataIndex: 'vcpus_used_percent',
+@@ -91,3 +96,43 @@ export const hypervisorFilters = [
+     name: 'hypervisor_type',
+   },
+ ];
++
++export const migrateTip = (
++  <span>
++    <span style={{ fontWeight: 600 }}>
++      {t(
++        'When you migrate a instance, you need to pay attention the following conditions:'
++      )}
++    </span>
++    <p style={{ marginTop: 10 }}>
++      {t(
++        'Choose a host to migrate instance to. If not selected, the scheduler will auto select target host.'
++      )}
++    </p>
++    <p>
++      {t(
++        'If the instance executes SGX ENCLAVE computing tasks, unable to migrate to a target host that does not support SGX services.'
++      )}
++    </p>
++  </span>
++);
++
++export const liveMigrateTip = (
++  <span>
++    <span style={{ fontWeight: 600 }}>
++      {t(
++        'When you migrate a instance, you need to pay attention the following conditions:'
++      )}
++    </span>
++    <p style={{ marginTop: 10 }}>
++      {t(
++        'Choose a host to live migrate instance to. If not selected, the scheduler will auto select target host.'
++      )}
++    </p>
++    <p>
++      {t(
++        'If the instance executes SGX ENCLAVE computing tasks, these tasks will not be executed after migration.'
++      )}
++    </p>
++  </span>
++);
+diff --git a/src/stores/keystone/project.js b/src/stores/keystone/project.js
+index fbeca30..2a6a151 100644
+--- a/src/stores/keystone/project.js
++++ b/src/stores/keystone/project.js
+@@ -352,6 +352,7 @@ export class ProjectStore extends Base {
+       server_groups,
+       server_group_members,
+       key_pairs,
++      sgx_epc,
+     } = data;
+     let ramGb = ram;
+     if (ram && ram !== -1) {
+@@ -365,6 +366,7 @@ export class ProjectStore extends Base {
+         server_groups,
+         server_group_members,
+         key_pairs,
++        sgx_epc,
+       }),
+     };
+     return novaReqBody;
+diff --git a/src/stores/nova/hypervisor.js b/src/stores/nova/hypervisor.js
+index 5bff02d..9705ee2 100644
+--- a/src/stores/nova/hypervisor.js
++++ b/src/stores/nova/hypervisor.js
+@@ -43,17 +43,6 @@ export class HypervisorStore extends Base {
+     };
+   }
+ 
+-  // get mapper() {
+-  //   return (item) => {
+-  //     item.vcpus_used_percent = ((item.vcpus_used / item.vcpus) * 100).toFixed(2);
+-  //     item.memory_mb_percent = ((item.memory_mb_used / item.memory_mb) * 100).toFixed(2);
+-  //     item.storage_percent = ((item.local_gb_used / item.local_gb) * 100).toFixed(2);
+-  //     item.memory_mb_used_gb = getGiBValue(item.memory_mb_used);
+-  //     item.memory_mb_gb = getGiBValue(item.memory_mb);
+-  //     return item;
+-  //   };
+-  // }
+-
+   async listDidFetch(items, all_projects, filters) {
+     const { simple } = filters;
+     if (simple) {
+@@ -74,6 +63,11 @@ export class HypervisorStore extends Base {
+         item.vcpus *= allocation_ratio;
+         item.memory_mb *= memory_ratio;
+       }
++      // SGX_EPC(if CUSTOM_SGX_EPC_MB existed)
++      const {
++        inventories: { CUSTOM_SGX_EPC_MB },
++      } = inventories[index];
++      item.sgx_enabled = !!CUSTOM_SGX_EPC_MB;
+       item.vcpus_used_percent =
+         (item.vcpus && ((item.vcpus_used / item.vcpus) * 100).toFixed(2)) || 0;
+       item.memory_mb_percent =
+@@ -112,6 +106,20 @@ export class HypervisorStore extends Base {
+     const [inventoriesBase, inventoriesVGPU, usagesVGPU] = await Promise.all(
+       promiseArr
+     );
++    // SGX_EPC(if CUSTOM_SGX_EPC_MB existed)
++    const {
++      inventories: { CUSTOM_SGX_EPC_MB },
++    } = inventoriesBase;
++    if (CUSTOM_SGX_EPC_MB) {
++      const {
++        usages: { CUSTOM_SGX_EPC_MB: sgx_epc_used },
++      } = await this.providerClient.usages.list(id);
++      const { total: sgx_epc = 0, allocation_ratio: sgx_ratio = 1 } =
++        CUSTOM_SGX_EPC_MB;
++      item.sgx_enabled = true;
++      item.sgx_epc = sgx_epc * sgx_ratio;
++      item.sgx_epc_used = sgx_epc_used;
++    }
+     if (item.hypervisor_type !== 'ironic') {
+       const {
+         inventories: {
+-- 
+2.17.1
+
+
+From 8c2fdd3e2241e1ed9788a8709b2d52ac2310df2e Mon Sep 17 00:00:00 2001
+From: "Jingwei.Zhang" <zhang.jingwei@99cloud.net>
+Date: Thu, 26 May 2022 16:28:27 +0800
+Subject: [PATCH 2/4] fix: Fix update ironic node traits
+
+1. Fix update iroinc node traits api
+2. Add export client for better reusage
+
+Change-Id: I47ef81265bb4f3a198067280f39206bb17b5fdc0
+---
+ src/client/barbican/index.js   | 2 +-
+ src/client/cinder/index.js     | 2 +-
+ src/client/client/constants.js | 2 +-
+ src/client/glance/index.js     | 2 +-
+ src/client/heat/index.js       | 2 +-
+ src/client/ironic/index.js     | 5 +++--
+ src/client/keystone/index.js   | 2 +-
+ src/client/magnum/index.js     | 6 +++---
+ src/client/neutron/index.js    | 2 +-
+ src/client/nova/index.js       | 2 +-
+ src/client/octavia/index.js    | 2 +-
+ src/client/placement/index.js  | 2 +-
+ src/client/skyline/index.js    | 2 +-
+ src/client/swift/index.js      | 2 +-
+ src/client/trove/index.js      | 2 +-
+ src/client/zun/index.js        | 4 ++--
+ 16 files changed, 21 insertions(+), 20 deletions(-)
+
+diff --git a/src/client/barbican/index.js b/src/client/barbican/index.js
+index 6f8f559..7140ad6 100644
+--- a/src/client/barbican/index.js
++++ b/src/client/barbican/index.js
+@@ -15,7 +15,7 @@
+ import Base from '../client/base';
+ import { barbicanBase } from '../client/constants';
+ 
+-class BarbicanClient extends Base {
++export class BarbicanClient extends Base {
+   get baseUrl() {
+     return barbicanBase();
+   }
+diff --git a/src/client/cinder/index.js b/src/client/cinder/index.js
+index 8a6e029..22f4859 100644
+--- a/src/client/cinder/index.js
++++ b/src/client/cinder/index.js
+@@ -15,7 +15,7 @@
+ import Base from '../client/base';
+ import { cinderBase, cinderEndpoint } from '../client/constants';
+ 
+-class CinderClient extends Base {
++export class CinderClient extends Base {
+   get baseUrl() {
+     return cinderBase();
+   }
+diff --git a/src/client/client/constants.js b/src/client/client/constants.js
+index c62888b..30b2ce8 100644
+--- a/src/client/client/constants.js
++++ b/src/client/client/constants.js
+@@ -34,7 +34,7 @@ export const endpointVersionMap = {
+   manilav2: 'v2',
+   barbican: 'v1',
+   zun: 'v1',
+-  magnum : 'v1',
++  magnum: 'v1',
+ };
+ 
+ export const endpointsDefault = {
+diff --git a/src/client/glance/index.js b/src/client/glance/index.js
+index 7fd1cfe..23ff3df 100644
+--- a/src/client/glance/index.js
++++ b/src/client/glance/index.js
+@@ -15,7 +15,7 @@
+ import Base from '../client/base';
+ import { glanceBase } from '../client/constants';
+ 
+-class GlanceClient extends Base {
++export class GlanceClient extends Base {
+   get baseUrl() {
+     return glanceBase();
+   }
+diff --git a/src/client/heat/index.js b/src/client/heat/index.js
+index 20c1470..92e95be 100644
+--- a/src/client/heat/index.js
++++ b/src/client/heat/index.js
+@@ -15,7 +15,7 @@
+ import Base from '../client/base';
+ import { heatBase } from '../client/constants';
+ 
+-class HeatClient extends Base {
++export class HeatClient extends Base {
+   get baseUrl() {
+     return heatBase();
+   }
+diff --git a/src/client/ironic/index.js b/src/client/ironic/index.js
+index b54adf7..c54592a 100644
+--- a/src/client/ironic/index.js
++++ b/src/client/ironic/index.js
+@@ -15,7 +15,7 @@
+ import Base from '../client/base';
+ import { ironicBase } from '../client/constants';
+ 
+-class IronicClient extends Base {
++export class IronicClient extends Base {
+   get baseUrl() {
+     return ironicBase();
+   }
+@@ -60,7 +60,8 @@ class IronicClient extends Base {
+             key: 'management/boot_device/supported',
+           },
+           {
+-            key: 'updateTraits',
++            name: 'updateTraits',
++            key: 'traits',
+             method: 'put',
+           },
+         ],
+diff --git a/src/client/keystone/index.js b/src/client/keystone/index.js
+index ed19978..6178337 100644
+--- a/src/client/keystone/index.js
++++ b/src/client/keystone/index.js
+@@ -15,7 +15,7 @@
+ import Base from '../client/base';
+ import { keystoneBase } from '../client/constants';
+ 
+-class KeystoneClient extends Base {
++export class KeystoneClient extends Base {
+   get baseUrl() {
+     return keystoneBase();
+   }
+diff --git a/src/client/magnum/index.js b/src/client/magnum/index.js
+index 73334e6..9fc9eec 100644
+--- a/src/client/magnum/index.js
++++ b/src/client/magnum/index.js
+@@ -13,7 +13,7 @@
+ import Base from '../client/base';
+ import { magnumBase } from '../client/constants';
+ 
+-class MagnumClient extends Base {
++export class MagnumClient extends Base {
+   get baseUrl() {
+     return magnumBase();
+   }
+@@ -30,7 +30,7 @@ class MagnumClient extends Base {
+             key: 'actions/resize',
+             method: 'post',
+           },
+-        ]
++        ],
+       },
+       {
+         name: 'clusterTemplates',
+@@ -42,4 +42,4 @@ class MagnumClient extends Base {
+ }
+ 
+ const magnumClient = new MagnumClient();
+-export default magnumClient;
+\ No newline at end of file
++export default magnumClient;
+diff --git a/src/client/neutron/index.js b/src/client/neutron/index.js
+index f5e5b07..43c7b91 100644
+--- a/src/client/neutron/index.js
++++ b/src/client/neutron/index.js
+@@ -15,7 +15,7 @@
+ import Base from '../client/base';
+ import { neutronBase } from '../client/constants';
+ 
+-class NeutronClient extends Base {
++export class NeutronClient extends Base {
+   get baseUrl() {
+     return neutronBase();
+   }
+diff --git a/src/client/nova/index.js b/src/client/nova/index.js
+index 6f6af7a..184f734 100644
+--- a/src/client/nova/index.js
++++ b/src/client/nova/index.js
+@@ -15,7 +15,7 @@
+ import Base from '../client/base';
+ import { novaBase } from '../client/constants';
+ 
+-class NovaClient extends Base {
++export class NovaClient extends Base {
+   get baseUrl() {
+     return novaBase();
+   }
+diff --git a/src/client/octavia/index.js b/src/client/octavia/index.js
+index b10e789..d109c04 100644
+--- a/src/client/octavia/index.js
++++ b/src/client/octavia/index.js
+@@ -15,7 +15,7 @@
+ import Base from '../client/base';
+ import { octaviaBase } from '../client/constants';
+ 
+-class OctaviaClient extends Base {
++export class OctaviaClient extends Base {
+   get baseUrl() {
+     return octaviaBase();
+   }
+diff --git a/src/client/placement/index.js b/src/client/placement/index.js
+index 5bdce1d..a6e343c 100644
+--- a/src/client/placement/index.js
++++ b/src/client/placement/index.js
+@@ -15,7 +15,7 @@
+ import Base from '../client/base';
+ import { placementBase } from '../client/constants';
+ 
+-class PlacementClient extends Base {
++export class PlacementClient extends Base {
+   get baseUrl() {
+     return placementBase();
+   }
+diff --git a/src/client/skyline/index.js b/src/client/skyline/index.js
+index 7a9f5fe..81cf39d 100644
+--- a/src/client/skyline/index.js
++++ b/src/client/skyline/index.js
+@@ -15,7 +15,7 @@
+ import Base from '../client/base';
+ import { skylineBase } from '../client/constants';
+ 
+-class SkylineClient extends Base {
++export class SkylineClient extends Base {
+   get baseUrl() {
+     return skylineBase();
+   }
+diff --git a/src/client/swift/index.js b/src/client/swift/index.js
+index dd5519a..77addef 100644
+--- a/src/client/swift/index.js
++++ b/src/client/swift/index.js
+@@ -15,7 +15,7 @@
+ import Base from '../client/base';
+ import { swiftBase } from '../client/constants';
+ 
+-class SwiftClient extends Base {
++export class SwiftClient extends Base {
+   get baseUrl() {
+     return swiftBase();
+   }
+diff --git a/src/client/trove/index.js b/src/client/trove/index.js
+index 8f3aa8c..25d573e 100644
+--- a/src/client/trove/index.js
++++ b/src/client/trove/index.js
+@@ -15,7 +15,7 @@
+ import Base from '../client/base';
+ import { troveBase } from '../client/constants';
+ 
+-class TroveClient extends Base {
++export class TroveClient extends Base {
+   get baseUrl() {
+     return troveBase();
+   }
+diff --git a/src/client/zun/index.js b/src/client/zun/index.js
+index 902629e..d267777 100644
+--- a/src/client/zun/index.js
++++ b/src/client/zun/index.js
+@@ -15,7 +15,7 @@
+ import { zunBase } from 'client/client/constants';
+ import Base from '../client/base';
+ 
+-class ZunClient extends Base {
++export class ZunClient extends Base {
+   get baseUrl() {
+     return zunBase();
+   }
+@@ -59,4 +59,4 @@ class ZunClient extends Base {
+ }
+ 
+ const zunClient = new ZunClient();
+-export default zunClient;
+\ No newline at end of file
++export default zunClient;
+-- 
+2.17.1
+
+
+From c87b3c4e9b1410a6a5d05026559d96d83511785a Mon Sep 17 00:00:00 2001
+From: xusongfu <xu.songfu@99cloud.net>
+Date: Mon, 20 Jun 2022 13:32:20 +0800
+Subject: [PATCH 3/4] [Animbus]fix: Fix the root disk in flavor and migrate of
+ instance
+
+1. Allow set root disk size in flavor creating when no-cinder
+2. Instances that do not support sgx are not allowed to migrate to hosts that support sgx
+
+Issue: 137840
+Issue: 137242
+---
+ src/locales/en.json                                  |  1 +
+ src/locales/zh.json                                  |  1 +
+ .../compute/containers/Flavor/Detail/BaseDetail.jsx  |  2 +-
+ .../Flavor/actions/StepCreate/ParamSetting.jsx       | 12 ++++++++++++
+ .../containers/Flavor/actions/StepCreate/index.jsx   |  3 ++-
+ .../compute/containers/Instance/actions/Migrate.jsx  |  3 ++-
+ 6 files changed, 19 insertions(+), 3 deletions(-)
+
+diff --git a/src/locales/en.json b/src/locales/en.json
+index 8eb2a0e..d7437b6 100644
+--- a/src/locales/en.json
++++ b/src/locales/en.json
+@@ -1900,6 +1900,7 @@
+   "Rollback In Progress": "Rollback In Progress",
+   "Romania": "Romania",
+   "Root Disk": "Root Disk",
++  "Root Disk(GiB)": "Root Disk(GiB)",
+   "Root directory": "Root directory",
+   "Router": "Router",
+   "Router Advertisements Mode": "Router Advertisements Mode",
+diff --git a/src/locales/zh.json b/src/locales/zh.json
+index c93d810..088dbdb 100644
+--- a/src/locales/zh.json
++++ b/src/locales/zh.json
+@@ -1900,6 +1900,7 @@
+   "Rollback In Progress": "回滚中",
+   "Romania": "罗马尼亚",
+   "Root Disk": "系统盘",
++  "Root Disk(GiB)": "根磁盘 (GiB)",
+   "Root directory": "根目录",
+   "Router": "路由器",
+   "Router Advertisements Mode": "路由广播模式",
+diff --git a/src/pages/compute/containers/Flavor/Detail/BaseDetail.jsx b/src/pages/compute/containers/Flavor/Detail/BaseDetail.jsx
+index 89b830e..85630c8 100644
+--- a/src/pages/compute/containers/Flavor/Detail/BaseDetail.jsx
++++ b/src/pages/compute/containers/Flavor/Detail/BaseDetail.jsx
+@@ -154,7 +154,7 @@ export class BaseDetail extends Base {
+   get diskCard() {
+     const options = [
+       {
+-        label: t('Disk'),
++        label: t('Root Disk(GiB)'),
+         dataIndex: 'disk',
+       },
+     ];
+diff --git a/src/pages/compute/containers/Flavor/actions/StepCreate/ParamSetting.jsx b/src/pages/compute/containers/Flavor/actions/StepCreate/ParamSetting.jsx
+index 623026c..bc3a6f8 100644
+--- a/src/pages/compute/containers/Flavor/actions/StepCreate/ParamSetting.jsx
++++ b/src/pages/compute/containers/Flavor/actions/StepCreate/ParamSetting.jsx
+@@ -152,6 +152,7 @@ export class ParamSetting extends Base {
+       settings: toJS(this.settingStore.list.data || []),
+       ephemeral: 0,
+       ephemeralTmp: 0,
++      disk: 0,
+       architecture: this.tab,
+       attachUsb: false,
+       resourceProps: this.getDefaultResourcePropValues(),
+@@ -180,6 +181,10 @@ export class ParamSetting extends Base {
+     ];
+   }
+ 
++  get enableCinder() {
++    return this.props.rootStore.checkEndpoint('cinder');
++  }
++
+   allowed = () => Promise.resolve();
+ 
+   numaValidate = ({ getFieldValue }) => ({
+@@ -382,6 +387,13 @@ export class ParamSetting extends Base {
+         hidden: isBareMetal || hasEphemeral,
+         disabled: !hasEphemeral,
+       },
++      {
++        name: 'disk',
++        label: t('Root Disk(GiB)'),
++        type: 'input-int',
++        min: 0,
++        hidden: this.enableCinder,
++      },
+       {
+         name: 'iops',
+         label: t('Storage IOPS'),
+diff --git a/src/pages/compute/containers/Flavor/actions/StepCreate/index.jsx b/src/pages/compute/containers/Flavor/actions/StepCreate/index.jsx
+index 1a607a6..13c0a25 100644
+--- a/src/pages/compute/containers/Flavor/actions/StepCreate/index.jsx
++++ b/src/pages/compute/containers/Flavor/actions/StepCreate/index.jsx
+@@ -122,12 +122,13 @@ export class StepCreate extends StepAction {
+       accessControl = {},
+       resourceProps,
+       traitProps,
++      disk = 0,
+     } = values;
+     const body = {
+       name,
+       vcpus,
+       ram: memoryGb * 1024,
+-      disk: 0,
++      disk,
+     };
+     const isPublic = accessType === 'public';
+     body['os-flavor-access:is_public'] = isPublic;
+diff --git a/src/pages/compute/containers/Instance/actions/Migrate.jsx b/src/pages/compute/containers/Instance/actions/Migrate.jsx
+index 9f89086..e70e404 100644
+--- a/src/pages/compute/containers/Instance/actions/Migrate.jsx
++++ b/src/pages/compute/containers/Instance/actions/Migrate.jsx
+@@ -121,7 +121,8 @@ export class LiveMigrate extends ModalAction {
+         disabledFunc: (record) =>
+           record.service_host === host ||
+           record.status !== 'enabled' ||
+-          (sgx_enabled && !record.sgx_enabled),
++          (sgx_enabled && !record.sgx_enabled) ||
++          (!sgx_enabled && record.sgx_enabled),
+       },
+     ];
+   }
+-- 
+2.17.1
+
+
+From e1c95597317d7ff81009e98e60625d9f4374407c Mon Sep 17 00:00:00 2001
+From: xusongfu <xu.songfu@99cloud.net>
+Date: Mon, 20 Jun 2022 13:32:20 +0800
+Subject: [PATCH 4/4] [Animbus]fix: Fix the root disk value
+
+Size is 0 when delete the input value
+
+Issue: 137840
+---
+ .../compute/containers/Flavor/actions/StepCreate/index.jsx    | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/src/pages/compute/containers/Flavor/actions/StepCreate/index.jsx b/src/pages/compute/containers/Flavor/actions/StepCreate/index.jsx
+index 13c0a25..57acf39 100644
+--- a/src/pages/compute/containers/Flavor/actions/StepCreate/index.jsx
++++ b/src/pages/compute/containers/Flavor/actions/StepCreate/index.jsx
+@@ -122,13 +122,13 @@ export class StepCreate extends StepAction {
+       accessControl = {},
+       resourceProps,
+       traitProps,
+-      disk = 0,
++      disk,
+     } = values;
+     const body = {
+       name,
+       vcpus,
+       ram: memoryGb * 1024,
+-      disk,
++      disk: disk || 0,
+     };
+     const isPublic = accessType === 'public';
+     body['os-flavor-access:is_public'] = isPublic;
+-- 
+2.17.1
+

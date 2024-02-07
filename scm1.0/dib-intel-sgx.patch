@@ -1,0 +1,348 @@
+From 5a22f32c72edbc00bab3b7de038ab26f2d98fc0e Mon Sep 17 00:00:00 2001
+From: "zhu.boxiang" <zhu.boxiang@99cloud.net>
+Date: Tue, 19 Apr 2022 14:06:53 +0800
+Subject: [PATCH 1/2] Support intel sgx
+
+1. add intel-sgx element
+2. support intel sgx for os:
+  - ubuntu 18.04
+  - ubuntu 20.04
+  - centos 7.9
+  - centos 8.3
+  - centos 8.4
+3. add a new method named local to get source codes for source-repositories
+---
+ .../pre-install.d/00-02-set-centos-mirror     | 21 ++++++
+ .../elements/intel-sgx/README.rst             | 64 +++++++++++++++++++
+ .../elements/intel-sgx/element-deps           |  1 +
+ .../intel-sgx/extra-data.d/99-copy-kernel-deb | 17 +++++
+ .../intel-sgx/install.d/50-update-kernel      | 64 +++++++++++++++++++
+ .../elements/intel-sgx/package-installs.yaml  |  2 +
+ diskimage_builder/elements/intel-sgx/pkg-map  |  6 ++
+ .../extra-data.d/98-source-repositories       |  7 +-
+ 8 files changed, 181 insertions(+), 1 deletion(-)
+ create mode 100644 diskimage_builder/elements/intel-sgx/README.rst
+ create mode 100644 diskimage_builder/elements/intel-sgx/element-deps
+ create mode 100755 diskimage_builder/elements/intel-sgx/extra-data.d/99-copy-kernel-deb
+ create mode 100755 diskimage_builder/elements/intel-sgx/install.d/50-update-kernel
+ create mode 100644 diskimage_builder/elements/intel-sgx/package-installs.yaml
+ create mode 100644 diskimage_builder/elements/intel-sgx/pkg-map
+
+diff --git a/diskimage_builder/elements/centos/pre-install.d/00-02-set-centos-mirror b/diskimage_builder/elements/centos/pre-install.d/00-02-set-centos-mirror
+index cd02c374..a6ff814a 100755
+--- a/diskimage_builder/elements/centos/pre-install.d/00-02-set-centos-mirror
++++ b/diskimage_builder/elements/centos/pre-install.d/00-02-set-centos-mirror
+@@ -20,6 +20,27 @@ elif [[ ${DIB_RELEASE} =~ '-stream' ]]; then
+     sed -e "s,^#baseurl=http[s]*://mirror.centos.org/\$contentdir/,baseurl=$DIB_DISTRIBUTION_MIRROR/,;/^mirrorlist=/d" -i /etc/yum.repos.d/CentOS-Stream-AppStream.repo
+     sed -e "s,^#baseurl=http[s]*://mirror.centos.org/\$contentdir/,baseurl=$DIB_DISTRIBUTION_MIRROR/,;/^mirrorlist=/d" -i /etc/yum.repos.d/CentOS-Stream-Extras.repo
+     sed -e "s,^#baseurl=http[s]*://mirror.centos.org/\$contentdir/,baseurl=$DIB_DISTRIBUTION_MIRROR/,;/^mirrorlist=/d" -i /etc/yum.repos.d/CentOS-Stream-PowerTools.repo
++elif [[ "${DIB_RELEASE}" == "8" ]]; then
++    if [[ "${DIB_FLAVOR}" == "GenericCloud-8.3.2011" ]]; then
++        sed -e "s,^#baseurl=http[s]*://mirror.centos.org/\$contentdir/\$releasever/,baseurl=$DIB_DISTRIBUTION_MIRROR/,;/^mirrorlist=/d" -i /etc/yum.repos.d/CentOS-Linux-BaseOS.repo
++        sed -e "s,^#baseurl=http[s]*://mirror.centos.org/\$contentdir/\$releasever/,baseurl=$DIB_DISTRIBUTION_MIRROR/,;/^mirrorlist=/d" -i /etc/yum.repos.d/CentOS-Linux-AppStream.repo
++        sed -e "s,^#baseurl=http[s]*://mirror.centos.org/\$contentdir/\$releasever/,baseurl=$DIB_DISTRIBUTION_MIRROR/,;/^mirrorlist=/d" -i /etc/yum.repos.d/CentOS-Linux-Plus.repo
++        sed -e "s,^#baseurl=http[s]*://mirror.centos.org/\$contentdir/\$releasever/,baseurl=$DIB_DISTRIBUTION_MIRROR/,;/^mirrorlist=/d" -i /etc/yum.repos.d/CentOS-Linux-Extras.repo
++        sed -e "s,^#baseurl=http[s]*://mirror.centos.org/\$contentdir/\$releasever/,baseurl=$DIB_DISTRIBUTION_MIRROR/,;/^mirrorlist=/d" -i /etc/yum.repos.d/CentOS-Linux-PowerTools.repo
++        echo `cat /etc/yum.repos.d/CentOS-Linux-BaseOS.repo`
++    elif [[ "${DIB_FLAVOR}" == "GenericCloud-8.4.2105" ]]; then
++        sed -e "s,^#baseurl=http[s]*://mirror.centos.org/\$contentdir/\$releasever/,baseurl=$DIB_DISTRIBUTION_MIRROR/,;/^mirrorlist=/d" -i /etc/yum.repos.d/CentOS-Linux-BaseOS.repo
++        sed -e "s,^#baseurl=http[s]*://mirror.centos.org/\$contentdir/\$releasever/,baseurl=$DIB_DISTRIBUTION_MIRROR/,;/^mirrorlist=/d" -i /etc/yum.repos.d/CentOS-Linux-AppStream.repo
++        sed -e "s,^#baseurl=http[s]*://mirror.centos.org/\$contentdir/\$releasever/,baseurl=$DIB_DISTRIBUTION_MIRROR/,;/^mirrorlist=/d" -i /etc/yum.repos.d/CentOS-Linux-Plus.repo
++        sed -e "s,^#baseurl=http[s]*://mirror.centos.org/\$contentdir/\$releasever/,baseurl=$DIB_DISTRIBUTION_MIRROR/,;/^mirrorlist=/d" -i /etc/yum.repos.d/CentOS-Linux-Extras.repo
++        sed -e "s,^#baseurl=http[s]*://mirror.centos.org/\$contentdir/\$releasever/,baseurl=$DIB_DISTRIBUTION_MIRROR/,;/^mirrorlist=/d" -i /etc/yum.repos.d/CentOS-Linux-PowerTools.repo
++    else
++        sed -e "s,^#baseurl=http[s]*://mirror.centos.org/\$contentdir/,baseurl=$DIB_DISTRIBUTION_MIRROR/,;/^mirrorlist=/d" -i /etc/yum.repos.d/CentOS-Linux-BaseOS.repo
++        sed -e "s,^#baseurl=http[s]*://mirror.centos.org/\$contentdir/,baseurl=$DIB_DISTRIBUTION_MIRROR/,;/^mirrorlist=/d" -i /etc/yum.repos.d/CentOS-Linux-AppStream.repo
++        sed -e "s,^#baseurl=http[s]*://mirror.centos.org/\$contentdir/,baseurl=$DIB_DISTRIBUTION_MIRROR/,;/^mirrorlist=/d" -i /etc/yum.repos.d/CentOS-Linux-Plus.repo
++        sed -e "s,^#baseurl=http[s]*://mirror.centos.org/\$contentdir/,baseurl=$DIB_DISTRIBUTION_MIRROR/,;/^mirrorlist=/d" -i /etc/yum.repos.d/CentOS-Linux-Extras.repo
++        sed -e "s,^#baseurl=http[s]*://mirror.centos.org/\$contentdir/,baseurl=$DIB_DISTRIBUTION_MIRROR/,;/^mirrorlist=/d" -i /etc/yum.repos.d/CentOS-Linux-PowerTools.repo
++    fi
+ else
+     sed -e "s,^#baseurl=http[s]*://mirror.centos.org/\$contentdir/,baseurl=$DIB_DISTRIBUTION_MIRROR/,;/^mirrorlist=/d" -i /etc/yum.repos.d/CentOS-Linux-BaseOS.repo
+     sed -e "s,^#baseurl=http[s]*://mirror.centos.org/\$contentdir/,baseurl=$DIB_DISTRIBUTION_MIRROR/,;/^mirrorlist=/d" -i /etc/yum.repos.d/CentOS-Linux-AppStream.repo
+diff --git a/diskimage_builder/elements/intel-sgx/README.rst b/diskimage_builder/elements/intel-sgx/README.rst
+new file mode 100644
+index 00000000..1c833672
+--- /dev/null
++++ b/diskimage_builder/elements/intel-sgx/README.rst
+@@ -0,0 +1,64 @@
++=========
++intel-sgx
++=========
++Support Intel SGX device. So we update the kernel of image to
++support the intel sgx. Currently, this element can configure
++Ubuntu 18.04/20.04 images and CentOS 7.9/8.3/8.4 images.
++
++It performs the following actions:
++
++For Ubuntu 18.04/20.04 images:
++  * Installs the ``vim`` and ``wget`` packages.
++  * Copy the deb packages from ``DIB_KERNEL_PATH`` to ``$TMP_MOUNT_PATH/tmp/kernel``.
++  * Updates the kernel.
++  * Remove the folder ``/tmp/kernel``.
++
++.. code:: bash
++
++  # Example For Ubuntu 18.04
++  export DIB_RELEASE=bionic
++  export DIB_KERNEL_PATH=/tmp/kernel/deb  # We can change the path
++  disk-image-create -a amd64 -t raw -o ubuntu-18.04 ubuntu vm cloud-init dhcp-all-interfaces intel-sgx
++
++.. code:: bash
++
++  # Example For Ubuntu 20.04
++  export DIB_RELEASE=focal
++  export DIB_KERNEL_PATH=/tmp/kernel/deb  # We can change the path
++  disk-image-create -a amd64 -t raw -o ubuntu-20.04 ubuntu vm cloud-init dhcp-all-interfaces intel-sgx
++
++For CentOS 8.3/8.4 images:
++  * Installs the ``vim`` and ``wget`` packages.
++  * Wget the repo for intel sgx stack.
++  * Updates the kernel.
++
++.. code:: bash
++
++  # Example For CentOS 8.3
++  export DIB_RELEASE=8
++  export DIB_FLAVOR=GenericCloud-8.3.2011
++  export DIB_DISTRIBUTION_MIRROR=http://mirrors.aliyun.com/centos-vault/8.3.2011
++  disk-image-create -a amd64 -t raw -o centos-8-3 centos vm cloud-init dhcp-all-interfaces intel-sgx
++
++.. code:: bash
++
++  # Example For CentOS 8.4
++  export DIB_RELEASE=8
++  export DIB_FLAVOR=GenericCloud-8.4.2105
++  export DIB_DISTRIBUTION_MIRROR=http://mirrors.aliyun.com/centos-vault/8.4.2105
++  disk-image-create -a amd64 -t raw -o centos-8-4 centos vm cloud-init dhcp-all-interfaces intel-sgx
++
++For CentOS 7.9 images:
++  * Installs the ``vim`` and ``wget`` packages.
++  * Copy the rpm packages from ``DIB_KERNEL_PATH`` to ``$TMP_MOUNT_PATH/tmp/kernel``.
++  * Updates the kernel.
++  * Remove the folder ``/tmp/kernel``.
++
++.. code:: bash
++
++  # Example For CentOS 7.9
++  export DIB_RELEASE=7
++  export DIB_KERNEL_PATH=/tmp/kernel/rpm  # We can change the path
++  disk-image-create -a amd64 -t raw -o centos-7-9 centos vm cloud-init dhcp-all-interfaces intel-sgx
++
++For CentOS 7.9 and CentOS 8.4 as phsical servers' images, we can add "block-device-efi" param as UEFI bootable.
+diff --git a/diskimage_builder/elements/intel-sgx/element-deps b/diskimage_builder/elements/intel-sgx/element-deps
+new file mode 100644
+index 00000000..7076aba9
+--- /dev/null
++++ b/diskimage_builder/elements/intel-sgx/element-deps
+@@ -0,0 +1 @@
++package-installs
+diff --git a/diskimage_builder/elements/intel-sgx/extra-data.d/99-copy-kernel-deb b/diskimage_builder/elements/intel-sgx/extra-data.d/99-copy-kernel-deb
+new file mode 100755
+index 00000000..5449e62d
+--- /dev/null
++++ b/diskimage_builder/elements/intel-sgx/extra-data.d/99-copy-kernel-deb
+@@ -0,0 +1,17 @@
++#!/bin/bash
++
++if [ ${DIB_DEBUG_TRACE:-1} -gt 0 ]; then
++    set -x
++fi
++set -eu
++set -o pipefail
++
++if [[ "${DIB_RELEASE}" == "bionic" ]] || [[ "${DIB_RELEASE}" == "focal" ]]
++then
++    sudo mkdir -p $TMP_MOUNT_PATH/tmp/kernel
++    sudo cp ${DIB_KERNEL_PATH}/*.deb $TMP_MOUNT_PATH/tmp/kernel/
++elif [[ "${DIB_RELEASE}" == "7" ]]
++then
++    sudo mkdir -p $TMP_MOUNT_PATH/tmp/kernel
++    sudo cp ${DIB_KERNEL_PATH}/*.rpm $TMP_MOUNT_PATH/tmp/kernel/
++fi
+diff --git a/diskimage_builder/elements/intel-sgx/install.d/50-update-kernel b/diskimage_builder/elements/intel-sgx/install.d/50-update-kernel
+new file mode 100755
+index 00000000..b8872b73
+--- /dev/null
++++ b/diskimage_builder/elements/intel-sgx/install.d/50-update-kernel
+@@ -0,0 +1,64 @@
++#!/bin/bash
++
++if [ ${DIB_DEBUG_TRACE:-0} -gt 0 ]; then
++    set -x
++fi
++set -eu
++set -o pipefail
++
++function config_udev_rule () {
++    cat << EOF | tee /etc/udev/rules.d/10-sgx.rules
++SUBSYSTEM=="misc",KERNEL=="enclave",MODE="0666"
++SUBSYSTEM=="misc",KERNEL=="provision",GROUP="sgx_prv",MODE="0660"
++SUBSYSTEM=="misc",KERNEL=="sgx_enclave",MODE="0666",SYMLINK+="sgx/enclave"
++SUBSYSTEM=="misc",KERNEL=="sgx_provision",GROUP="sgx_prv",MODE="0660",SYMLINK+="sgx/provision"
++EOF
++}
++
++err_msg="""
++>>>>>>>>>> ONLY SUPPORT <<<<<<<<<<
++>>>>>>>>>> UBUNTU 18.04 <<<<<<<<<<
++>>>>>>>>>> UBUNTU 20.04 <<<<<<<<<<
++>>>>>>>>>> CENTOS 8.3   <<<<<<<<<<
++>>>>>>>>>> CENTOS 8.4   <<<<<<<<<<
++>>>>>>>>>> CENTOS 7.9   <<<<<<<<<<
++"""
++
++if [[ "${DIB_RELEASE}" == "bionic" ]] || [[ "${DIB_RELEASE}" == "focal" ]]
++then
++    # wget -q ${DIB_KERNEL_URL}/linux-headers-5.13.4-051304_5.13.4-051304.202107201535_all.deb
++    # wget -q ${DIB_KERNEL_URL}/linux-headers-5.13.4-051304-generic_5.13.4-051304.202107201535_amd64.deb
++    # wget -q ${DIB_KERNEL_URL}/linux-image-unsigned-5.13.4-051304-generic_5.13.4-051304.202107201535_amd64.deb
++    # wget -q ${DIB_KERNEL_URL}/linux-modules-5.13.4-051304-generic_5.13.4-051304.202107201535_amd64.deb
++    pushd /tmp/kernel
++    dpkg -i *.deb
++    popd
++    rm -rf /tmp/kernel
++elif [[ "${DIB_RELEASE}" == "8" ]]
++then
++    if [[ "${DIB_FLAVOR}" == "GenericCloud-8.3.2011" ]]
++    then
++        # CentOS 8.3
++        wget -q https://download.01.org/intelsgxstack/2021-12-08/rhel/intelsgxstack.repo -O /etc/yum.repos.d/intelsgxstack.repo
++        dnf install -y intel-mvp-mainline-kernel-sgx-kvm
++    elif [[ "${DIB_FLAVOR}" == "GenericCloud-8.4.2105" ]]
++    then
++        # CentOS 8.4
++        wget -q https://download.01.org/intelsgxstack/2021-12-08/rhel/intelsgxstack.repo -O /etc/yum.repos.d/intelsgxstack.repo
++        dnf install -y intel-mvp-mainline-kernel-sgx-kvm
++    else
++        echo ${err_msg}
++        exit 1
++    fi
++elif [[ "${DIB_RELEASE}" == "7" ]]
++then
++    pushd /tmp/kernel
++    yum localinstall -y *.rpm
++    popd
++    rm -rf /tmp/kernel
++else
++    echo ${err_msg}
++    exit 1
++fi
++
++config_udev_rule
+diff --git a/diskimage_builder/elements/intel-sgx/package-installs.yaml b/diskimage_builder/elements/intel-sgx/package-installs.yaml
+new file mode 100644
+index 00000000..9641019d
+--- /dev/null
++++ b/diskimage_builder/elements/intel-sgx/package-installs.yaml
+@@ -0,0 +1,2 @@
++vim:
++wget:
+diff --git a/diskimage_builder/elements/intel-sgx/pkg-map b/diskimage_builder/elements/intel-sgx/pkg-map
+new file mode 100644
+index 00000000..12c78504
+--- /dev/null
++++ b/diskimage_builder/elements/intel-sgx/pkg-map
+@@ -0,0 +1,6 @@
++{
++  "default": {
++    "vim": "vim",
++    "wget": "wget"
++  }
++}
+diff --git a/diskimage_builder/elements/source-repositories/extra-data.d/98-source-repositories b/diskimage_builder/elements/source-repositories/extra-data.d/98-source-repositories
+index b30f9a93..f77ab712 100755
+--- a/diskimage_builder/elements/source-repositories/extra-data.d/98-source-repositories
++++ b/diskimage_builder/elements/source-repositories/extra-data.d/98-source-repositories
+@@ -35,7 +35,7 @@ function get_repos_for_element(){
+     local REPO_SOURCES=$1
+     local CACHE_URL=$TMP_HOOKS_PATH/bin/cache-url
+ 
+-    local REGEX="^([^ ]+) (git|tar|file|package) ?(/[^ ]+)? ?([^ ]+)? ?([^ ]*)$"
++    local REGEX="^([^ ]+) (git|tar|file|package|local) ?(/[^ ]+)? ?([^ ]+)? ?([^ ]*)$"
+ 
+     # this can be a rather long list (e.g. caching ~1000 openstack
+     # repos), so we make a rough count for progress display
+@@ -222,6 +222,11 @@ function get_repos_for_element(){
+                     sudo curl -f $REPOLOCATION -o $REPO_DEST
+                 fi
+                 ;;
++           local)
++                sudo mkdir -p $REPO_SUB_DIRECTORY
++                sudo rm -rf $REPO_DEST
++                sudo cp -r $REPOLOCATION $REPO_DEST
++                ;;
+             *)
+                 echo "Unsupported repository type: $REPOTYPE"
+                 return 1
+-- 
+2.17.1
+
+
+From 438f05c2ae280ef4e9c63e3920ee93dad9485531 Mon Sep 17 00:00:00 2001
+From: shaleijie <sha.leijie@99cloud.net>
+Date: Tue, 12 Jul 2022 18:50:54 +0800
+Subject: [PATCH 2/2] Install gdisk in OS image
+
+Without gidsk, machine boot from UEFI can not auto grow root disk.
+---
+ diskimage_builder/elements/intel-sgx/README.rst            | 6 +++---
+ diskimage_builder/elements/intel-sgx/package-installs.yaml | 1 +
+ diskimage_builder/elements/intel-sgx/pkg-map               | 3 ++-
+ 3 files changed, 6 insertions(+), 4 deletions(-)
+
+diff --git a/diskimage_builder/elements/intel-sgx/README.rst b/diskimage_builder/elements/intel-sgx/README.rst
+index 1c833672..6a4f436b 100644
+--- a/diskimage_builder/elements/intel-sgx/README.rst
++++ b/diskimage_builder/elements/intel-sgx/README.rst
+@@ -8,7 +8,7 @@ Ubuntu 18.04/20.04 images and CentOS 7.9/8.3/8.4 images.
+ It performs the following actions:
+ 
+ For Ubuntu 18.04/20.04 images:
+-  * Installs the ``vim`` and ``wget`` packages.
++  * Installs the ``gdisk``, ``vim`` and ``wget`` packages.
+   * Copy the deb packages from ``DIB_KERNEL_PATH`` to ``$TMP_MOUNT_PATH/tmp/kernel``.
+   * Updates the kernel.
+   * Remove the folder ``/tmp/kernel``.
+@@ -28,7 +28,7 @@ For Ubuntu 18.04/20.04 images:
+   disk-image-create -a amd64 -t raw -o ubuntu-20.04 ubuntu vm cloud-init dhcp-all-interfaces intel-sgx
+ 
+ For CentOS 8.3/8.4 images:
+-  * Installs the ``vim`` and ``wget`` packages.
++  * Installs the ``gdisk``, ``vim`` and ``wget`` packages.
+   * Wget the repo for intel sgx stack.
+   * Updates the kernel.
+ 
+@@ -49,7 +49,7 @@ For CentOS 8.3/8.4 images:
+   disk-image-create -a amd64 -t raw -o centos-8-4 centos vm cloud-init dhcp-all-interfaces intel-sgx
+ 
+ For CentOS 7.9 images:
+-  * Installs the ``vim`` and ``wget`` packages.
++  * Installs the ``gdisk``, ``vim`` and ``wget`` packages.
+   * Copy the rpm packages from ``DIB_KERNEL_PATH`` to ``$TMP_MOUNT_PATH/tmp/kernel``.
+   * Updates the kernel.
+   * Remove the folder ``/tmp/kernel``.
+diff --git a/diskimage_builder/elements/intel-sgx/package-installs.yaml b/diskimage_builder/elements/intel-sgx/package-installs.yaml
+index 9641019d..af095b48 100644
+--- a/diskimage_builder/elements/intel-sgx/package-installs.yaml
++++ b/diskimage_builder/elements/intel-sgx/package-installs.yaml
+@@ -1,2 +1,3 @@
+ vim:
+ wget:
++gdisk:
+diff --git a/diskimage_builder/elements/intel-sgx/pkg-map b/diskimage_builder/elements/intel-sgx/pkg-map
+index 12c78504..4c0f221b 100644
+--- a/diskimage_builder/elements/intel-sgx/pkg-map
++++ b/diskimage_builder/elements/intel-sgx/pkg-map
+@@ -1,6 +1,7 @@
+ {
+   "default": {
+     "vim": "vim",
+-    "wget": "wget"
++    "wget": "wget",
++    "gdisk": "gdisk"
+   }
+ }
+-- 
+2.17.1
+
