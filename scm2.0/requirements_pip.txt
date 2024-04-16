@@ -1,7 +1,7 @@
 ansible==8.5.0
-ansible-core==2.15.5
-cryptography==41.0.6
-jinja2==2.11.3
+ansible-core==2.15.9
+cryptography==42.0.4
+jinja2==3.1.3
 netaddr==0.7.19
 pbr==5.4.4
 jmespath==0.9.5
