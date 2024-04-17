@@ -1,0 +1,614 @@
+From 0375d801599a0573689f365af6078d5807e08e8b Mon Sep 17 00:00:00 2001
+From: qqing-li <qingqing.li@intel.com>
+Date: Tue, 10 Oct 2023 14:39:03 +0800
+Subject: [PATCH] Support TDX attestation
+
+---
+ ansible/roles/dcap/defaults/main.yml          | 133 ++++++++++--------
+ ansible/roles/dcap/handlers/main.yml          |  26 +++-
+ ansible/roles/dcap/tasks/bootstrap.yml        |  12 +-
+ .../roles/dcap/tasks/bootstrap_service.yml    |  16 +--
+ ansible/roles/dcap/tasks/config.yml           |  51 +++++--
+ ansible/roles/dcap/tasks/precheck.yml         |   8 +-
+ ansible/roles/dcap/tasks/stop.yml             |  16 ++-
+ ...cap-server.json.j2 => pccs-server.json.j2} |  33 ++---
+ .../dcap/templates/sgx_default_qcnl.conf.j2   |  63 +++++++++
+ etc/kolla/globals.yml                         |   6 +-
+ etc/kolla/passwords.yml                       |   2 +-
+ 11 files changed, 254 insertions(+), 112 deletions(-)
+ rename ansible/roles/dcap/templates/{dcap-server.json.j2 => pccs-server.json.j2} (52%)
+ create mode 100644 ansible/roles/dcap/templates/sgx_default_qcnl.conf.j2
+
+diff --git a/ansible/roles/dcap/defaults/main.yml b/ansible/roles/dcap/defaults/main.yml
+index e6fae27ac..2999dfe79 100644
+--- a/ansible/roles/dcap/defaults/main.yml
++++ b/ansible/roles/dcap/defaults/main.yml
+@@ -1,74 +1,91 @@
+ ---
+ project_name: dcap
+-log_dir: /opt/intel/sgx-dcap-pccs/logs
+-custom_dcap_server_ssl: false
++custom_dcap_namespace: "custom"
+ 
+-dcap_services:
+-  dcap-server:
+-    container_name: dcap_server
+-    group: control
+-    enabled: true
+-    image: "{{ dcap_server_image_full }}"
+-    volumes: "{{ dcap_server_volumes + dcap_server_extra_volumes if custom_dcap_server_ssl|bool else dcap_server_volumes }}"
+-    haproxy:
+-      dcap_server:
+-        enabled: "{{ enable_dcap }}"
+-        mode: "tcp"
+-        external: false
+-        port: "{{ dcap_port }}"
+-      dcap_server_external:
+-        enabled: "{{ enable_dcap }}"
+-        mode: "tcp"
+-        external: true
+-        port: "{{ dcap_port }}"
+-  dcap-register:
+-    container_name: dcap_register
+-    group: compute
+-    enabled: true
+-    image: "{{ dcap_register_image_full }}"
+-    volumes: "{{ dcap_register_volumes }}"
++pccs_server_service: "pccs-server"
++mp_register_service: "mp-register"
++qgs_server_service: "qgs-server"
+ 
+-dcap_server_service: "dcap-server"
+-dcap_register_service: "dcap-register"
++pccs_uri: "https://api.trustedservices.intel.com/sgx/certification/v4/"
++pccs_port: "8081"
++pccs_hosts: "0.0.0.0"
++pccs_api_key: ""
++pccs_proxy: ""
++# hash sha512 of pccs_user_password
++pccs_user_password_hash: ""
++# hash sha512 of pccs_admin_password
++pccs_admin_password_hash: ""
++pccs_cache_fill_mode: "LAZY"
++pccs_log_level: "info"
+ 
+-dcap_uri: "https://api.trustedservices.intel.com/sgx/certification/v3/"
+-dcap_port: "8081"
+-dcap_host: "{{ api_interface_address }}"
+-dcap_api_key: ""
+-dcap_proxy: ""
+-# hash sha512 of dcap_user_password
+-dcap_user_password_hash: ""
+-# hash sha512 of dcap_admin_password
+-dcap_admin_password_hash: ""
+-dcap_cache_fill_mode: "LAZY"
+-dcap_log_level: "info"
++pccs_database_type: "mysql"
++pccs_database_username: "dcap"
++pccs_database_host: "{{ database_address }}"
++pccs_database_port: "{{ database_port }}"
++pccs_database_name: "pckcache"
+ 
+-dcap_database_type: "mysql"
+-dcap_database_username: "dcap"
+-dcap_database_host: "{{ database_address }}"
+-dcap_database_name: "pckcache"
+-custom_dcap_namespace: "custom"
++pccs_url: "{{ groups['control'][0] }}"
++pccs_server_image_name: "pccs-server"
++pccs_server_image_tag: "latest"
++pccs_server_image_full: "{{ docker_registry ~ '/' if docker_registry else '' }}{{ custom_dcap_namespace }}/{{ pccs_server_image_name }}:{{ pccs_server_image_tag }}"
++custom_pccs_server_ssl: false
+ 
+-dcap_server_image_name: "dcap-server"
+-dcap_server_image_tag: "latest"
+-dcap_server_image_full: "{{ docker_registry ~ '/' if docker_registry else '' }}{{ custom_dcap_namespace }}/{{ dcap_server_image_name }}:{{ dcap_server_image_tag }}"
++mp_register_image_name: "mp-register"
++mp_register_image_tag: "latest"
++mp_register_image_full: "{{ docker_registry ~ '/' if docker_registry else '' }}{{ custom_dcap_namespace }}/{{ mp_register_image_name }}:{{ mp_register_image_tag }}"
++mp_register_log_dir: /var/log/mpa_registration.log
+ 
+-dcap_register_image_name: "dcap-register"
+-dcap_register_image_tag: "latest"
+-dcap_register_image_full: "{{ docker_registry ~ '/' if docker_registry else '' }}{{ custom_dcap_namespace }}/{{ dcap_register_image_name }}:{{ dcap_register_image_tag }}"
++qgs_server_image_name: "qgs-server"
++qgs_server_image_tag: "latest"
++qgs_server_image_full:  "{{ docker_registry ~ '/' if docker_registry else '' }}{{ custom_dcap_namespace }}/{{ qgs_server_image_name }}:{{ qgs_server_image_tag }}"
+ 
+-dcap_server_volumes:
+-  - "/var/log/kolla/pccs:{{ log_dir }}"
++pccs_server_volumes:
+   - "/etc/localtime:/etc/localtime:ro"
+-  - "{{ node_config_directory }}/{{ dcap_server_service }}/dcap-server.json:/opt/intel/sgx-dcap-pccs/config/default.json"
++  - "{{ node_config_directory }}/{{ pccs_server_service }}/pccs-server.json:/opt/intel/sgx-dcap-pccs/config/default.json"
+ 
+-dcap_server_extra_volumes:
+-  - "{{ node_config_directory }}/{{ dcap_server_service }}/csr.pem:/opt/intel/sgx-dcap-pccs/ssl_key/csr.pem"
+-  - "{{ node_config_directory }}/{{ dcap_server_service }}/file.crt:/opt/intel/sgx-dcap-pccs/ssl_key/file.crt"
+-  - "{{ node_config_directory }}/{{ dcap_server_service }}/private.pem:/opt/intel/sgx-dcap-pccs/ssl_key/private.pem"
++pccs_server_extra_volumes:
++  - "{{ node_config_directory }}/{{ pccs_server_service }}/csr.pem:/opt/intel/sgx-dcap-pccs/ssl_key/csr.pem"
++  - "{{ node_config_directory }}/{{ pccs_server_service }}/file.crt:/opt/intel/sgx-dcap-pccs/ssl_key/file.crt"
++  - "{{ node_config_directory }}/{{ pccs_server_service }}/private.pem:/opt/intel/sgx-dcap-pccs/ssl_key/private.pem"
+ 
+-dcap_register_volumes:
++mp_register_volumes:
++  - "/var/log/kolla/dcap/mpa_registration.log:{{ mp_register_log_dir }}"
+   - "/etc/localtime:/etc/localtime:ro"
+   - "/lib/modules:/lib/modules:ro"
+   - "/dev:/dev:rw"
+   - "/sys/firmware:/sys/firmware:ro"
++
++qgs_server_volumes:
++  - "/etc/localtime:/etc/localtime:ro"
++  - "{{ node_config_directory }}/{{ qgs_server_service }}/sgx_default_qcnl.conf:/etc/sgx_default_qcnl.conf"
++
++dcap_services:
++  pccs-server:
++    container_name: pccs_server
++    group: control
++    enabled: true
++    image: "{{ pccs_server_image_full }}"
++    volumes: "{{ pccs_server_volumes + pccs_server_extra_volumes if custom_pccs_server_ssl|bool else pccs_server_volumes }}"
++    haproxy:
++      pccs_server:
++        enabled: "{{ enable_dcap }}"
++        mode: "tcp"
++        external: false
++        port: "{{ pccs_port }}"
++      pccs_server_external:
++        enabled: "{{ enable_dcap }}"
++        mode: "tcp"
++        external: true
++        port: "{{ pccs_port }}"
++  mp-register:
++    container_name: mp_register
++    group: compute
++    enabled: true
++    image: "{{ mp_register_image_full }}"
++    volumes: "{{ mp_register_volumes }}"
++  qgs-server:
++    container_name: qgs_server
++    group: compute
++    enabled: true
++    image: "{{ qgs_server_image_full }}"
++    volumes: "{{ qgs_server_volumes }}"
+\ No newline at end of file
+diff --git a/ansible/roles/dcap/handlers/main.yml b/ansible/roles/dcap/handlers/main.yml
+index e1777e99e..7b9ca97c0 100644
+--- a/ansible/roles/dcap/handlers/main.yml
++++ b/ansible/roles/dcap/handlers/main.yml
+@@ -1,7 +1,7 @@
+ ---
+-- name: Restart dcap-server container
++- name: Restart pccs-server container
+   vars:
+-    service_name: "{{ dcap_server_service }}"
++    service_name: "{{ pccs_server_service }}"
+     service: "{{ dcap_services[service_name] }}"
+   become: true
+   docker_container:
+@@ -11,8 +11,28 @@
+     restart: yes
+     restart_policy: unless-stopped
+     network_mode: host
+-    command: "dcap-server"
++    command: "pccs-server"
+     volumes: "{{ service.volumes }}"
+   when:
+     - inventory_hostname in groups[service.group]
+     - service.enabled | bool
++
++- name: Restart qgs-server container
++  vars:
++    service_name: "{{ qgs_server_service }}"
++    service: "{{ dcap_services[service_name] }}"
++  become: true
++  docker_container:
++    name: "{{ service.container_name }}"
++    image: "{{ service.image }}"
++    state: started
++    restart: yes
++    restart_policy: unless-stopped
++    network_mode: host
++    command: "qgs-server"
++    volumes: "{{ service.volumes }}"
++    privileged: true
++  when:
++    - inventory_hostname in groups[service.group]
++    - service.enabled | bool
++    - hostvars[inventory_hostname].enable_tdx | default(false) | bool
+\ No newline at end of file
+diff --git a/ansible/roles/dcap/tasks/bootstrap.yml b/ansible/roles/dcap/tasks/bootstrap.yml
+index 95429e79a..6bf2ec285 100644
+--- a/ansible/roles/dcap/tasks/bootstrap.yml
++++ b/ansible/roles/dcap/tasks/bootstrap.yml
+@@ -1,5 +1,5 @@
+ ---
+-- name: Creating dcap database
++- name: Creating pccs database
+   become: true
+   kolla_toolbox:
+     module_name: mysql_db
+@@ -8,13 +8,13 @@
+       login_port: "{{ database_port }}"
+       login_user: "{{ database_user }}"
+       login_password: "{{ database_password }}"
+-      name: "{{ dcap_database_name }}"
++      name: "{{ pccs_database_name }}"
+   run_once: True
+   delegate_to: "{{ groups['control'][0] }}"
+   when:
+     - not use_preconfigured_databases | bool
+ 
+-- name: Creating dcap database user and setting permissions
++- name: Creating pccs database user and setting permissions
+   become: true
+   kolla_toolbox:
+     module_name: mysql_user
+@@ -23,10 +23,10 @@
+       login_port: "{{ database_port }}"
+       login_user: "{{ database_user }}"
+       login_password: "{{ database_password }}"
+-      name: "{{ dcap_database_username }}"
+-      password: "{{ dcap_database_password }}"
++      name: "{{ pccs_database_username }}"
++      password: "{{ pccs_database_password }}"
+       host: "%"
+-      priv: "{{ dcap_database_name }}.*:ALL"
++      priv: "{{ pccs_database_name }}.*:ALL"
+       append_privs: "yes"
+   run_once: True
+   delegate_to: "{{ groups['control'][0] }}"
+diff --git a/ansible/roles/dcap/tasks/bootstrap_service.yml b/ansible/roles/dcap/tasks/bootstrap_service.yml
+index ee6c64873..3976909de 100644
+--- a/ansible/roles/dcap/tasks/bootstrap_service.yml
++++ b/ansible/roles/dcap/tasks/bootstrap_service.yml
+@@ -1,7 +1,7 @@
+ ---
+-- name: Running dcap register container
++- name: Running mp-register container
+   vars:
+-    service_name: "{{ dcap_register_service }}"
++    service_name: "{{ mp_register_service }}"
+     service: "{{ dcap_services[service_name] }}"
+   become: true
+   docker_container:
+@@ -11,27 +11,27 @@
+     auto_remove: yes
+     restart_policy: no
+     network_mode: host
+-    command: "dcap-register"
++    command: "mp-register"
+     volumes: "{{ service.volumes }}"
+     privileged: true
+   when:
+     - inventory_hostname in groups[service.group]
+     - service.enabled | bool
+-    - hostvars[inventory_hostname].enable_sgx | default(false) | bool
++    - hostvars[inventory_hostname].enable_sgx | default(false) | bool or hostvars[inventory_hostname].enable_tdx | default(false) | bool
+ 
+ - name: Validating if the registration is complete
+   vars:
+-    service_name: "{{ dcap_register_service }}"
++    service_name: "{{ mp_register_service }}"
+     service: "{{ dcap_services[service_name] }}"
+   become: true
+   docker_container_info:
+     name: "{{ service.container_name }}"
+-  register: dcap_register_info
++  register: mp_register_info
+   until:
+-    - dcap_register_info.container is none or dcap_register_info.container.State.Status == "exited"
++    - mp_register_info.container is none or mp_register_info.container.State.Status == "exited"
+   retries: 10
+   delay: 6
+   when:
+     - inventory_hostname in groups[service.group]
+     - service.enabled | bool
+-    - hostvars[inventory_hostname].enable_sgx | default(false) | bool
++    - hostvars[inventory_hostname].enable_sgx | default(false) | bool or hostvars[inventory_hostname].enable_tdx | default(false) | bool
+diff --git a/ansible/roles/dcap/tasks/config.yml b/ansible/roles/dcap/tasks/config.yml
+index 145ed6ed5..d724521d7 100644
+--- a/ansible/roles/dcap/tasks/config.yml
++++ b/ansible/roles/dcap/tasks/config.yml
+@@ -12,26 +12,39 @@
+     - item.value.enabled | bool
+   with_dict: "{{ dcap_services }}"
+ 
+-# ensure the existence of '/var/lib/docker/volumes/kolla_logs/_data/pccs'
+-- name: Ensuring log directories exist
++# ensure the existence of '/var/lib/docker/volumes/kolla_logs/_data/dcap'
++- name: Ensuring mp-register log directory exist
+   vars:
+-    service_name: "{{ dcap_server_service }}"
++    service_name: "{{ mp_register_service }}"
+     service: "{{ dcap_services[service_name] }}"
+   file:
+-    path: "{{ docker_runtime_directory or '/var/lib/docker' }}/volumes/kolla_logs/_data/pccs"
++    path: "{{ docker_runtime_directory or '/var/lib/docker' }}/volumes/kolla_logs/_data/dcap"
+     state: directory
+     recurse: yes
+   when:
+     - inventory_hostname in groups[service.group]
+     - service.enabled | bool
++    - hostvars[inventory_hostname].enable_sgx | default(false) | bool or hostvars[inventory_hostname].enable_tdx | default(false) | bool
+ 
+-- name: Copying over dcap-server.json
++- name: Ensuring mp-register log file exist
+   vars:
+-    service_name: "{{ dcap_server_service }}"
++    service_name: "{{ mp_register_service }}"
++    service: "{{ dcap_services[service_name] }}"
++  file:
++    path: "{{ docker_runtime_directory or '/var/lib/docker' }}/volumes/kolla_logs/_data/dcap/mpa_registration.log"
++    state: touch
++  when:
++    - inventory_hostname in groups[service.group]
++    - service.enabled | bool
++    - hostvars[inventory_hostname].enable_sgx | default(false) | bool or hostvars[inventory_hostname].enable_tdx | default(false) | bool
++
++- name: Copying over pccs-server.json
++  vars:
++    service_name: "{{ pccs_server_service }}"
+     service: "{{ dcap_services[service_name] }}"
+   template:
+-    src: "dcap-server.json.j2"
+-    dest: "{{ node_config_directory }}/{{ service_name }}/dcap-server.json"
++    src: "pccs-server.json.j2"
++    dest: "{{ node_config_directory }}/{{ service_name }}/pccs-server.json"
+     mode: "0660"
+   become: true
+   when:
+@@ -40,9 +53,9 @@
+   notify:
+     - "Restart {{ service_name }} container"
+ 
+-- name: Copying over custom ssl files
++- name: Copying over pccs custom ssl files
+   vars:
+-    service_name: "{{ dcap_server_service }}"
++    service_name: "{{ pccs_server_service }}"
+     service: "{{ dcap_services[service_name] }}"
+   copy:
+     src: "{{ node_custom_config }}/{{ service_name }}/{{ item }}"
+@@ -52,10 +65,26 @@
+   when:
+     - inventory_hostname in groups[service.group]
+     - service.enabled | bool
+-    - custom_dcap_server_ssl | bool
++    - custom_pccs_server_ssl | bool
+   with_items:
+     - "csr.pem"
+     - "file.crt"
+     - "private.pem"
+   notify:
+     - "Restart {{ service_name }} container"
++
++- name: Copying over qgs-server sgx_default_qcnl.conf
++  vars:
++    service_name: "{{ qgs_server_service }}"
++    service: "{{ dcap_services[service_name] }}"
++  template:
++    src: "sgx_default_qcnl.conf.j2"
++    dest: "{{ node_config_directory }}/{{ service_name }}/sgx_default_qcnl.conf"
++    mode: "0660"
++  become: true
++  when:
++    - inventory_hostname in groups[service.group]
++    - service.enabled | bool
++    - hostvars[inventory_hostname].enable_tdx | default(false) | bool
++  notify:
++    - "Restart {{ service_name }} container"
+\ No newline at end of file
+diff --git a/ansible/roles/dcap/tasks/precheck.yml b/ansible/roles/dcap/tasks/precheck.yml
+index 7043bb265..415dd5bc3 100644
+--- a/ansible/roles/dcap/tasks/precheck.yml
++++ b/ansible/roles/dcap/tasks/precheck.yml
+@@ -1,7 +1,7 @@
+ ---
+ - name: Get container facts
+   vars:
+-    service_name: "{{ dcap_server_service }}"
++    service_name: "{{ pccs_server_service }}"
+     service: "{{ dcap_services[service_name] }}"
+   become: true
+   kolla_container_facts:
+@@ -9,13 +9,13 @@
+       - "{{ service.container_name }}"
+   register: container_facts
+ 
+-- name: Checking free port for dcap-server
++- name: Checking free port for pccs-server
+   vars:
+-    service_name: "{{ dcap_server_service }}"
++    service_name: "{{ pccs_server_service }}"
+     service: "{{ dcap_services[service_name] }}"
+   wait_for:
+     host: "{{ api_interface_address }}"
+-    port: "{{ dcap_port }}"
++    port: "{{ pccs_port }}"
+     connect_timeout: 1
+     timeout: 1
+     state: stopped
+diff --git a/ansible/roles/dcap/tasks/stop.yml b/ansible/roles/dcap/tasks/stop.yml
+index c6732b6ae..f1f4e394a 100644
+--- a/ansible/roles/dcap/tasks/stop.yml
++++ b/ansible/roles/dcap/tasks/stop.yml
+@@ -1,7 +1,19 @@
+ ---
+-- name: "Stopping dcap server containers"
++- name: "Stopping pccs-server containers"
+   vars:
+-    service_name: "{{ dcap_server_service }}"
++    service_name: "{{ pccs_server_service }}"
++    service: "{{ dcap_services[service_name] }}"
++  docker_container:
++    name: "{{ service.container_name }}"
++    state: stopped
++  when:
++    - service.enabled | bool
++    - service.container_name not in skip_stop_containers
++    - inventory_hostname in groups[service.group]
++
++- name: "Stopping qgs-server containers"
++  vars:
++    service_name: "{{ qgs_server_service }}"
+     service: "{{ dcap_services[service_name] }}"
+   docker_container:
+     name: "{{ service.container_name }}"
+diff --git a/ansible/roles/dcap/templates/dcap-server.json.j2 b/ansible/roles/dcap/templates/pccs-server.json.j2
+similarity index 52%
+rename from ansible/roles/dcap/templates/dcap-server.json.j2
+rename to ansible/roles/dcap/templates/pccs-server.json.j2
+index fd9a5d11e..48c4b7ebd 100644
+--- a/ansible/roles/dcap/templates/dcap-server.json.j2
++++ b/ansible/roles/dcap/templates/pccs-server.json.j2
+@@ -1,19 +1,19 @@
+ {
+-    "HTTPS_PORT" : {{ dcap_port }},
+-    "hosts" : "{{ dcap_host }}",
+-    "uri": "{{ dcap_uri }}",
+-    "ApiKey" : "{{ dcap_api_key }}",
+-    "proxy" : "{{ dcap_proxy }}",
++    "HTTPS_PORT" : {{ pccs_port }},
++    "hosts" : "{{ pccs_hosts }}",
++    "uri": "{{ pccs_uri }}",
++    "ApiKey" : "{{ pccs_api_key }}",
++    "proxy" : "{{ pccs_proxy }}",
+     "RefreshSchedule": "0 0 1 * * *",
+-    "UserTokenHash" : "{{ dcap_user_password_hash }}",
+-    "AdminTokenHash" : "{{ dcap_admin_password_hash }}",
+-    "CachingFillMode" : "{{ dcap_cache_fill_mode }}",
+-    "LogLevel" : "{{ dcap_log_level }}",
+-    "DB_CONFIG" : "{{ dcap_database_type }}",
++    "UserTokenHash" : "{{ pccs_user_password_hash }}",
++    "AdminTokenHash" : "{{ pccs_admin_password_hash }}",
++    "CachingFillMode" : "{{ pccs_cache_fill_mode }}",
++    "LogLevel" : "{{ pccs_log_level }}",
++    "DB_CONFIG" : "{{ pccs_database_type }}",
+     "sqlite" : {
+         "database" : "database",
+-        "username" : "{{ dcap_database_username }}",
+-        "password" : "{{ dcap_database_password }}",
++        "username" : "{{ pccs_database_username }}",
++        "password" : "{{ pccs_database_password }}",
+         "options" : {
+             "host": "localhost",
+             "dialect": "sqlite",
+@@ -31,11 +31,12 @@
+         }
+     },
+     "mysql" : {
+-        "database" : "{{ dcap_database_name }}",
+-        "username" : "{{ dcap_database_username }}",
+-        "password" : "{{ dcap_database_password }}",
++        "database" : "{{ pccs_database_name }}",
++        "username" : "{{ pccs_database_username }}",
++        "password" : "{{ pccs_database_password }}",
+         "options" : {
+-            "host": "{{ dcap_database_host }}",
++            "host": "{{ pccs_database_host }}",
++            "port": "{{ pccs_database_port }}",
+             "dialect": "mysql",
+             "pool": {
+                 "max": 5,
+diff --git a/ansible/roles/dcap/templates/sgx_default_qcnl.conf.j2 b/ansible/roles/dcap/templates/sgx_default_qcnl.conf.j2
+new file mode 100644
+index 000000000..b864a6fac
+--- /dev/null
++++ b/ansible/roles/dcap/templates/sgx_default_qcnl.conf.j2
+@@ -0,0 +1,63 @@
++{
++  // *** ATTENTION : This file is in JSON format so the keys are case sensitive. Don't change them.
++
++  //PCCS server address
++  "pccs_url": "https://{{ pccs_url }}:{{ pccs_port }}/sgx/certification/v4/"
++
++  // To accept insecure HTTPS certificate, set this option to false
++  ,"use_secure_cert": false
++
++  // You can use the Intel PCS or another PCCS to get quote verification collateral.  Retrieval of PCK
++  // Certificates will always use the PCCS described in pccs_url.  When collateral_service is not defined, both
++  // PCK Certs and verification collateral will be retrieved using pccs_url
++  //,"collateral_service": "https://api.trustedservices.intel.com/sgx/certification/v4/"
++
++  // If you use a PCCS service to get the quote verification collateral, you can specify which PCCS API version is to be used.
++  // The legacy 3.0 API will return CRLs in HEX encoded DER format and the sgx_ql_qve_collateral_t.version will be set to 3.0, while
++  // the new 3.1 API will return raw DER format and the sgx_ql_qve_collateral_t.version will be set to 3.1. The pccs_api_version
++  // setting is ignored if collateral_service is set to the Intel PCS. In this case, the pccs_api_version is forced to be 3.1
++  // internally.  Currently, only values of 3.0 and 3.1 are valid.  Note, if you set this to 3.1, the PCCS use to retrieve
++  // verification collateral must support the new 3.1 APIs.
++  //,"pccs_api_version": "3.1"
++
++  // Maximum retry times for QCNL. If RETRY is not defined or set to 0, no retry will be performed.
++  // It will first wait one second and then for all forthcoming retries it will double the waiting time.
++  // By using retry_delay you disable this exponential backoff algorithm
++  ,"retry_times": 6
++
++  // Sleep this amount of seconds before each retry when a transfer has failed with a transient error
++  ,"retry_delay": 10
++
++  // If local_pck_url is defined, the QCNL will try to retrieve PCK cert chain from local_pck_url first,
++  // and failover to pccs_url as in legacy mode.
++  //,"local_pck_url": "http://localhost:8081/sgx/certification/v4/"
++
++  // If local_pck_url is not defined, set pck_cache_expire_hours to a none-zero value will enable local cache.
++  // The PCK certificates will be cached in memory and then to the disk drive.
++  // ===== Important: Once the local cache files are created, currently there is no other way to clean them other
++  //                  than to delete them manually, or wait for them to expire after "pck_cache_expire_hours" hours.
++  //                  To delete the cache files manually, go to these foders:
++  //                       Linux : $AZDCAP_CACHE, $XDG_CACHE_HOME, $HOME, $TMPDIR, /tmp/
++  //                       Windows : $AZDCAP_CACHE, $LOCALAPPDATA\..\..\LocalLow
++  //                  If there is a folder called .dcap-qcnl, delete it. Restart the service after all cache
++  //                  folders were deleted. The same method applies to "verify_collateral_cache_expire_hours"
++  ,"pck_cache_expire_hours": 168
++
++  // To set cache expire time for quote verification collateral in hours
++  // See the above comment for pck_cache_expire_hours for more information on the local cache.
++  ,"verify_collateral_cache_expire_hours": 168
++
++  // You can add custom request headers and parameters to the get certificate API.
++  // But the default PCCS implementation just ignores them.
++  //,"custom_request_options" : {
++  //  "get_cert" : {
++  //    "headers": {
++  //      "head1": "value1"
++  //    },
++  //    "params": {
++  //      "param1": "value1",
++  //      "param2": "value2"
++  //    }
++  //  }
++  //}
++}
+diff --git a/etc/kolla/globals.yml b/etc/kolla/globals.yml
+index 9449a8129..a86d2f607 100644
+--- a/etc/kolla/globals.yml
++++ b/etc/kolla/globals.yml
+@@ -667,6 +667,6 @@
+ ######
+ # DCAP
+ ######
+-# dcap_api_key:
+-# dcap_user_password_hash:
+-# dcap_admin_password_hash:
++# pccs_api_key:
++# pccs_user_password_hash:
++# pccs_admin_password_hash:
+diff --git a/etc/kolla/passwords.yml b/etc/kolla/passwords.yml
+index 46017f4f2..b2cfdeb25 100644
+--- a/etc/kolla/passwords.yml
++++ b/etc/kolla/passwords.yml
+@@ -66,7 +66,7 @@ barbican_crypto_key:
+ blazar_database_password:
+ blazar_keystone_password:
+ 
+-dcap_database_password:
++pccs_database_password:
+ 
+ keystone_admin_password:
+ keystone_database_password:
+-- 
+2.31.1
+

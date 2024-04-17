@@ -1,0 +1,227 @@
+From d82e23b65e86dd26f98c5ae78e4fe1792f8dcfd3 Mon Sep 17 00:00:00 2001
+From: yes <kun.shen@intel.com>
+Date: Mon, 9 Oct 2023 15:13:11 +0800
+Subject: [PATCH] Support Intel tdx
+
+    add intel tdx element: support guest os ubuntu 22.04, rhel8.7
+
+---
+ .../elements/intel-tdx/README.rst             | 41 ++++++++++
+ .../elements/intel-tdx/element-deps           |  1 +
+ .../intel-tdx/extra-data.d/99-copy-packages   | 18 +++++
+ .../intel-tdx/install.d/50-update-kernel      | 78 +++++++++++++++++++
+ .../elements/intel-tdx/package-installs.yaml  |  3 +
+ diskimage_builder/elements/intel-tdx/pkg-map  |  7 ++
+ .../ubuntu/root.d/10-cache-ubuntu-tarball     |  2 +-
+ 7 files changed, 149 insertions(+), 1 deletion(-)
+ create mode 100644 diskimage_builder/elements/intel-tdx/README.rst
+ create mode 100644 diskimage_builder/elements/intel-tdx/element-deps
+ create mode 100755 diskimage_builder/elements/intel-tdx/extra-data.d/99-copy-packages
+ create mode 100755 diskimage_builder/elements/intel-tdx/install.d/50-update-kernel
+ create mode 100644 diskimage_builder/elements/intel-tdx/package-installs.yaml
+ create mode 100644 diskimage_builder/elements/intel-tdx/pkg-map
+
+diff --git a/diskimage_builder/elements/intel-tdx/README.rst b/diskimage_builder/elements/intel-tdx/README.rst
+new file mode 100644
+index 00000000..747466d2
+--- /dev/null
++++ b/diskimage_builder/elements/intel-tdx/README.rst
+@@ -0,0 +1,41 @@
++=========
++intel-tdx
++=========
++Support Intel tdx device. So we update the kernel, grub of image to
++support the intel tdx. Currently, this element can configure
++Ubuntu 22.04 and Redhat 8.7 images.
++
++Pre-request: qemu-img
++
++It performs the following actions:
++
++For Ubuntu 22.04 images:
++  * Installs the ``gdisk``, ``vim`` and ``wget`` packages.
++  * Copy the deb packages from ``DIB_KERNEL_PATH`` to ``$TMP_MOUNT_PATH/tmp/kernel``.
++  * Updates the kernel.
++  * Remove the folder ``/tmp/kernel``.
++  * TD-VM user/passwd: root/123456.
++
++.. code:: bash
++
++  # Example For Ubuntu 22.04
++  export DIB_RELEASE=jammy
++  export DIB_KERNEL_PATH=/tmp/kernel/deb  # We can change the path
++  disk-image-create -a amd64 -t qcow2 -o td-ubuntu-22.04 ubuntu vm cloud-init block-device-efi dhcp-all-interfaces intel-tdx
++
++For Redhat 8.7 images:
++  * Pre-build the tdx rhel-8 guest packages.
++  * Pre-build the .qcow2 format guest image: td-guest-rhel-8.7.qcow2, refer to [redhat 8.7 image](https://github.com/intel/tdx-tools/blob/tdx-1.5/build/rhel-8/guest-image/create-efi-img.sh).
++  * Add the rhel yum repo config ``rhel8.repo``.
++  * Copy the guest rpm packages from ``DIB_KERNEL_PATH`` to ``$TMP_MOUNT_PATH/tmp/kernel/guest``.
++  * Updates the kernel, grub.
++  * Remove the folder ``/tmp/kernel/``.
++
++.. code:: bash
++
++  # Example For Redhat 8.7
++  export DIB_RELEASE=8
++  export DIB_YUM_REPO_CONF=/tmp/rhel8.repo
++  export DIB_KERNEL_PATH=/tmp/kernel # We can change the path
++  export DIB_LOCAL_IMAGE=<path>/td-guest-rhel-8.7.qcow2
++  disk-image-create -a amd64 -t qcow2 -o td-guest-redhat-8.7 rhel vm cloud-init block-device-efi dhcp-all-interfaces intel-tdx
+diff --git a/diskimage_builder/elements/intel-tdx/element-deps b/diskimage_builder/elements/intel-tdx/element-deps
+new file mode 100644
+index 00000000..5de08f6a
+--- /dev/null
++++ b/diskimage_builder/elements/intel-tdx/element-deps
+@@ -0,0 +1 @@
++package-installs
+\ No newline at end of file
+diff --git a/diskimage_builder/elements/intel-tdx/extra-data.d/99-copy-packages b/diskimage_builder/elements/intel-tdx/extra-data.d/99-copy-packages
+new file mode 100755
+index 00000000..605c9730
+--- /dev/null
++++ b/diskimage_builder/elements/intel-tdx/extra-data.d/99-copy-packages
+@@ -0,0 +1,18 @@
++#!/bin/bash
++
++if [ ${DIB_DEBUG_TRACE:-1} -gt 0 ]; then
++    set -x
++fi
++set -eu
++set -o pipefail
++
++if [[ "${DIB_RELEASE}" == "jammy" ]]
++then
++    # copy kernel and dependency package from host to guest image
++    sudo mkdir -p $TMP_MOUNT_PATH/tmp/kernel
++    sudo cp ${DIB_KERNEL_PATH}/*.deb $TMP_MOUNT_PATH/tmp/kernel/
++elif [[ "${DIB_RELEASE}" == "8" ]]
++then
++    sudo mkdir -p $TMP_MOUNT_PATH/srv/guest
++    sudo cp -r ${DIB_KERNEL_PATH}/* $TMP_MOUNT_PATH/srv/guest
++fi
+\ No newline at end of file
+diff --git a/diskimage_builder/elements/intel-tdx/install.d/50-update-kernel b/diskimage_builder/elements/intel-tdx/install.d/50-update-kernel
+new file mode 100755
+index 00000000..17aa0740
+--- /dev/null
++++ b/diskimage_builder/elements/intel-tdx/install.d/50-update-kernel
+@@ -0,0 +1,78 @@
++#!/bin/bash
++
++if [ ${DIB_DEBUG_TRACE:-0} -gt 0 ]; then
++    set -x
++fi
++set -eu
++set -o pipefail
++
++err_msg="""
++>>>>>>>>>> ONLY SUPPORT <<<<<<<<<<
++>>>>>>>>>> Ubuntu 22.04 <<<<<<<<<<
++>>>>>>>>>> Redhat 8.7   <<<<<<<<<<
++"""
++
++function error() {
++    echo -e "\e[1;31mERROR: $*\e[0;0m"
++    exit 1
++}
++
++function change_root_passwd () {
++    echo "root:123456" | chpasswd
++}
++
++function change_ssh_setting () {
++    sudo sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/g' /etc/ssh/sshd_config
++    sudo sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/g' /etc/ssh/sshd_config
++}
++
++function create_tdx_guest_repo () {
++    cat << EOF > /etc/yum.repos.d/srv_guest.repo
++[srv_guest]
++name=srv_guest
++baseurl=file:///srv/guest
++enabled=1
++gpgcheck=0
++module_hotfixes=true
++EOF
++}
++
++function create_grub_cfg () {
++    cat << EOF > /etc/default/grub
++GRUB_TIMEOUT=5
++GRUB_DISTRIBUTOR="$(sed 's, release .*$,,g' /etc/system-release)"
++GRUB_DEFAULT=saved
++GRUB_DISABLE_SUBMENU=true
++GRUB_TERMINAL="console"
++GRUB_CMDLINE_LINUX="root=/dev/vda3 rw console=hvc0 net.ifnames.prefix=net ipv6.disable=1 quiet systemd.show_status=yes"
++GRUB_DISABLE_RECOVERY="true"
++GRUB_ENABLE_BLSCFG=true
++EOF
++}
++
++if [[ "${DIB_RELEASE}" == "jammy" ]]; then
++    change_root_passwd
++    change_ssh_setting
++    ssh-keygen -A
++    pushd /tmp/kernel
++    dpkg -i *.deb
++    popd
++    rm -rf /tmp/kernel
++    systemctl mask pollinate.service
++elif [[ "${DIB_RELEASE}" == "8" ]]; then
++    change_root_passwd
++    change_ssh_setting
++    ssh-keygen -A
++    # GRUB="intel-mvp-tdx-guest-grub2-efi-x64 intel-mvp-tdx-guest-grub2-pc"
++    SHIM="intel-mvp-tdx-guest-shim"
++    KERNEL="intel-mvp-tdx-kernel"
++    REPO="srv_guest"
++
++    create_tdx_guest_repo
++    create_grub_cfg
++    dnf install ${SHIM} ${KERNEL} -y --repo ${REPO}
++    # grub2-editenv /boot/efi/EFI/redhat/grubenv create
++    # grub2-mkconfig -o /boot/efi/EFI/redhat/grub.cfg
++else
++    error ${err_msg}
++fi
+\ No newline at end of file
+diff --git a/diskimage_builder/elements/intel-tdx/package-installs.yaml b/diskimage_builder/elements/intel-tdx/package-installs.yaml
+new file mode 100644
+index 00000000..af095b48
+--- /dev/null
++++ b/diskimage_builder/elements/intel-tdx/package-installs.yaml
+@@ -0,0 +1,3 @@
++vim:
++wget:
++gdisk:
+diff --git a/diskimage_builder/elements/intel-tdx/pkg-map b/diskimage_builder/elements/intel-tdx/pkg-map
+new file mode 100644
+index 00000000..740adaad
+--- /dev/null
++++ b/diskimage_builder/elements/intel-tdx/pkg-map
+@@ -0,0 +1,7 @@
++{
++  "default": {
++    "vim": "vim",
++    "wget": "wget",
++    "gdisk": "gdisk"
++  }
++}
+\ No newline at end of file
+diff --git a/diskimage_builder/elements/ubuntu/root.d/10-cache-ubuntu-tarball b/diskimage_builder/elements/ubuntu/root.d/10-cache-ubuntu-tarball
+index 0babcefb..98a51da0 100755
+--- a/diskimage_builder/elements/ubuntu/root.d/10-cache-ubuntu-tarball
++++ b/diskimage_builder/elements/ubuntu/root.d/10-cache-ubuntu-tarball
+@@ -41,7 +41,7 @@ function get_ubuntu_tarball() {
+             $TMP_HOOKS_PATH/bin/cache-url \
+                 $DIB_CLOUD_IMAGES/$BASE_IMAGE_FILE $CACHED_FILE
+             pushd $DIB_IMAGE_CACHE
+-            if ! grep "$BASE_IMAGE_FILE" $CACHED_SUMS | sha256sum --check - ; then
++            if ! grep "${BASE_IMAGE_FILE}$" $CACHED_SUMS | sha256sum --check - ; then
+                 $TMP_HOOKS_PATH/bin/cache-url -f \
+                     $DIB_CLOUD_IMAGES/$BASE_IMAGE_FILE $CACHED_FILE
+                 grep "$BASE_IMAGE_FILE" $CACHED_SUMS | sha256sum --check -
+-- 
+2.31.1
+

@@ -1,0 +1,102 @@
+From 297abf77715e2e50dfc7314a7e555228df62fbc3 Mon Sep 17 00:00:00 2001
+From: spevenhe <xinyi.he@intel.com>
+Date: Mon, 16 Oct 2023 11:10:32 +0800
+Subject: [PATCH] support tdx
+
+change tdx quota
+---
+ .../Hypervisors/Hypervisor/Detail/index.jsx   | 19 +++++++++++++++++--
+ src/resources/nova/hypervisor.jsx             |  5 +++++
+ src/stores/nova/hypervisor.js                 | 16 ++++++++++++++++
+ 3 files changed, 38 insertions(+), 2 deletions(-)
+
+diff --git a/src/pages/compute/containers/Hypervisors/Hypervisor/Detail/index.jsx b/src/pages/compute/containers/Hypervisors/Hypervisor/Detail/index.jsx
+index 052fc793..59892583 100644
+--- a/src/pages/compute/containers/Hypervisors/Hypervisor/Detail/index.jsx
++++ b/src/pages/compute/containers/Hypervisors/Hypervisor/Detail/index.jsx
+@@ -71,8 +71,16 @@ export class HypervisorDetail extends Base {
+           ),
+       },
+     ];
+-    const { vgpus, vgpus_used, sgx_enabled, sgx_epc, sgx_epc_used } =
+-      this.store.detail;
++    const {
++      vgpus,
++      vgpus_used,
++      sgx_enabled,
++      sgx_epc,
++      sgx_epc_used,
++      tdx_enabled,
++      tdx_total,
++      tdx_used,
++    } = this.store.detail;
+     if (vgpus) {
+       info.push({
+         title: t('VGPU (Core)'),
+@@ -87,6 +95,13 @@ export class HypervisorDetail extends Base {
+         render: () => `${sgx_epc_used} / ${sgx_epc}`,
+       });
+     }
++    if (tdx_enabled) {
++      info.push({
++        title: t('TD-VM Number'),
++        dataIndex: 'tdx_used',
++        render: () => `${tdx_used} / ${tdx_total}`,
++      });
++    }
+     return info;
+   }
+ 
+diff --git a/src/resources/nova/hypervisor.jsx b/src/resources/nova/hypervisor.jsx
+index 41edd0a7..581d6aec 100644
+--- a/src/resources/nova/hypervisor.jsx
++++ b/src/resources/nova/hypervisor.jsx
+@@ -30,6 +30,11 @@ export const hypervisorColumns = [
+     dataIndex: 'sgx_enabled',
+     render: (value) => (value ? t('Enabled') : '-'),
+   },
++  {
++    title: t('TDX'),
++    dataIndex: 'tdx_enabled',
++    render: (value) => (value ? t('Enabled') : '-'),
++  },
+   {
+     title: t('VCPU (Core)'),
+     dataIndex: 'vcpus_used_percent',
+diff --git a/src/stores/nova/hypervisor.js b/src/stores/nova/hypervisor.js
+index 9705ee20..01d31b72 100644
+--- a/src/stores/nova/hypervisor.js
++++ b/src/stores/nova/hypervisor.js
+@@ -68,6 +68,10 @@ export class HypervisorStore extends Base {
+         inventories: { CUSTOM_SGX_EPC_MB },
+       } = inventories[index];
+       item.sgx_enabled = !!CUSTOM_SGX_EPC_MB;
++      const {
++        inventories: { CUSTOM_MEM_ENCRYPTION_CONTEXT_TDX },
++      } = inventories[index];
++      item.tdx_enabled = !!CUSTOM_MEM_ENCRYPTION_CONTEXT_TDX;
+       item.vcpus_used_percent =
+         (item.vcpus && ((item.vcpus_used / item.vcpus) * 100).toFixed(2)) || 0;
+       item.memory_mb_percent =
+@@ -120,6 +124,18 @@ export class HypervisorStore extends Base {
+       item.sgx_epc = sgx_epc * sgx_ratio;
+       item.sgx_epc_used = sgx_epc_used;
+     }
++    const {
++      inventories: { CUSTOM_MEM_ENCRYPTION_CONTEXT_TDX },
++    } = inventoriesBase;
++    if (CUSTOM_MEM_ENCRYPTION_CONTEXT_TDX) {
++      const {
++        usages: { CUSTOM_MEM_ENCRYPTION_CONTEXT_TDX: tdx_used },
++      } = await this.providerClient.usages.list(id);
++      item.tdx_enabled = true;
++      const { total: tdx_total = 0 } = CUSTOM_MEM_ENCRYPTION_CONTEXT_TDX;
++      item.tdx_total = tdx_total;
++      item.tdx_used = tdx_used;
++    }
+     if (item.hypervisor_type !== 'ironic') {
+       const {
+         inventories: {
+-- 
+2.31.1
+

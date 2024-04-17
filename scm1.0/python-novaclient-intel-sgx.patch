@@ -1,0 +1,374 @@
+From cabc897cd1f0ba6114132ccce8ad306716f9f7eb Mon Sep 17 00:00:00 2001
+From: shaleijie <sha.leijie@99cloud.net>
+Date: Thu, 1 Sep 2022 11:34:29 +0800
+Subject: [PATCH] Add support for quota of sgx_epc
+
+* nova quota-update --sgx-epc <tenant-id>
+* nova quota-class-update --sgx-epc <class-name>
+---
+ .../tests/functional/v2/legacy/test_quotas.py |  2 +-
+ .../tests/functional/v2/test_quota_classes.py |  5 ++--
+ novaclient/tests/functional/v2/test_quotas.py |  6 ++---
+ novaclient/tests/unit/fixture_data/quotas.py  |  2 ++
+ novaclient/tests/unit/v2/fakes.py             | 17 ++++++++++++
+ novaclient/tests/unit/v2/test_shell.py        | 13 +++++++--
+ novaclient/v2/quota_classes.py                | 10 ++++---
+ novaclient/v2/quotas.py                       |  4 ++-
+ novaclient/v2/shell.py                        | 27 ++++++++++++++++++-
+ 9 files changed, 73 insertions(+), 13 deletions(-)
+
+diff --git a/novaclient/tests/functional/v2/legacy/test_quotas.py b/novaclient/tests/functional/v2/legacy/test_quotas.py
+index 6eeddbe1..adf48eb1 100644
+--- a/novaclient/tests/functional/v2/legacy/test_quotas.py
++++ b/novaclient/tests/functional/v2/legacy/test_quotas.py
+@@ -18,7 +18,7 @@ class TestQuotasNovaClient(base.ClientTestBase):
+ 
+     COMPUTE_API_VERSION = "2.1"
+ 
+-    _quota_resources = ['instances', 'cores', 'ram',
++    _quota_resources = ['instances', 'cores', 'ram', 'sgx_epc',
+                         'floating_ips', 'fixed_ips', 'metadata_items',
+                         'injected_files', 'injected_file_content_bytes',
+                         'injected_file_path_bytes', 'key_pairs',
+diff --git a/novaclient/tests/functional/v2/test_quota_classes.py b/novaclient/tests/functional/v2/test_quota_classes.py
+index 399f5396..8dcba2d8 100644
+--- a/novaclient/tests/functional/v2/test_quota_classes.py
++++ b/novaclient/tests/functional/v2/test_quota_classes.py
+@@ -23,7 +23,7 @@ class TestQuotaClassesNovaClient(base.ClientTestBase):
+     COMPUTE_API_VERSION = '2.1'
+ 
+     # The list of quota class resources we expect in the output table.
+-    _included_resources = ['instances', 'cores', 'ram',
++    _included_resources = ['instances', 'cores', 'ram', 'sgx_epc',
+                            'floating_ips', 'fixed_ips', 'metadata_items',
+                            'injected_files', 'injected_file_content_bytes',
+                            'injected_file_path_bytes', 'key_pairs',
+@@ -119,7 +119,8 @@ class TestQuotasNovaClient2_50(TestQuotaClassesNovaClient):
+     _included_resources = ['instances', 'cores', 'ram', 'metadata_items',
+                            'injected_files', 'injected_file_content_bytes',
+                            'injected_file_path_bytes', 'key_pairs',
+-                           'server_groups', 'server_group_members']
++                           'server_groups', 'server_group_members',
++                           'sgx_epc']
+ 
+     # The list of quota class resources we do not expect in the output table.
+     _excluded_resources = ['floating_ips', 'fixed_ips',
+diff --git a/novaclient/tests/functional/v2/test_quotas.py b/novaclient/tests/functional/v2/test_quotas.py
+index effddf8a..5cddc5a3 100644
+--- a/novaclient/tests/functional/v2/test_quotas.py
++++ b/novaclient/tests/functional/v2/test_quotas.py
+@@ -18,7 +18,7 @@ class TestQuotasNovaClient2_35(test_quotas.TestQuotasNovaClient):
+ 
+     COMPUTE_API_VERSION = "2.35"
+ 
+-    _quota_resources = ['instances', 'cores', 'ram',
++    _quota_resources = ['instances', 'cores', 'ram', 'sgx_epc',
+                         'floating_ips', 'fixed_ips', 'metadata_items',
+                         'injected_files', 'injected_file_content_bytes',
+                         'injected_file_path_bytes', 'key_pairs',
+@@ -56,7 +56,7 @@ class TestQuotasNovaClient2_36(TestQuotasNovaClient2_35):
+ 
+     # The 2.36 microversion stops proxying network quota resources like
+     # floating/fixed IPs and security groups/rules.
+-    _quota_resources = ['instances', 'cores', 'ram',
++    _quota_resources = ['instances', 'cores', 'ram', 'sgx_epc',
+                         'metadata_items', 'injected_files',
+                         'injected_file_content_bytes',
+                         'injected_file_path_bytes', 'key_pairs',
+@@ -69,6 +69,6 @@ class TestQuotasNovaClient2_57(TestQuotasNovaClient2_35):
+     COMPUTE_API_VERSION = "2.latest"
+ 
+     # The 2.57 microversion deprecates injected_file* quotas.
+-    _quota_resources = ['instances', 'cores', 'ram',
++    _quota_resources = ['instances', 'cores', 'ram', 'sgx_epc',
+                         'metadata_items', 'key_pairs',
+                         'server_groups', 'server_group_members']
+diff --git a/novaclient/tests/unit/fixture_data/quotas.py b/novaclient/tests/unit/fixture_data/quotas.py
+index 1ffa8c26..79715ea5 100644
+--- a/novaclient/tests/unit/fixture_data/quotas.py
++++ b/novaclient/tests/unit/fixture_data/quotas.py
+@@ -57,6 +57,7 @@ class V1(base.Fixture):
+             'injected_file_content_bytes': 1,
+             'injected_file_path_bytes': 1,
+             'ram': 1,
++            'sgx_epc': 1,
+             'fixed_ips': -1,
+             'floating_ips': 1,
+             'instances': 1,
+@@ -79,6 +80,7 @@ class V2_57(V1):
+             'id': tenant_id,
+             'metadata_items': 1,
+             'ram': 1,
++            'sgx_epc': 1,
+             'instances': 1,
+             'cores': 1,
+             'key_pairs': 1,
+diff --git a/novaclient/tests/unit/v2/fakes.py b/novaclient/tests/unit/v2/fakes.py
+index dd60d7f4..e386d6f6 100644
+--- a/novaclient/tests/unit/v2/fakes.py
++++ b/novaclient/tests/unit/v2/fakes.py
+@@ -1302,6 +1302,7 @@ class FakeSessionClient(base_client.SessionClient):
+                 'injected_file_content_bytes': 1,
+                 'injected_file_path_bytes': 1,
+                 'ram': 1,
++                'sgx_epc': 1,
+                 'floating_ips': 1,
+                 'instances': 1,
+                 'injected_files': 1,
+@@ -1318,6 +1319,7 @@ class FakeSessionClient(base_client.SessionClient):
+                 'injected_file_content_bytes': 1,
+                 'injected_file_path_bytes': 1,
+                 'ram': 1,
++                'sgx_epc': 1,
+                 'floating_ips': 1,
+                 'instances': 1,
+                 'injected_files': 1,
+@@ -1380,6 +1382,11 @@ class FakeSessionClient(base_client.SessionClient):
+                     'limit': 51200,
+                     'reserved': 0
+                 },
++                'sgx_epc': {
++                    'in_use': 0,
++                    'limit': 1024,
++                    'reserved': 0
++                },
+                 'security_group_rules': {
+                     'in_use': 0,
+                     'limit': 20,
+@@ -1410,6 +1417,7 @@ class FakeSessionClient(base_client.SessionClient):
+                 'injected_file_content_bytes': 1,
+                 'injected_file_path_bytes': 1,
+                 'ram': 1,
++                'sgx_epc': 1,
+                 'floating_ips': 1,
+                 'instances': 1,
+                 'injected_files': 1,
+@@ -1426,6 +1434,7 @@ class FakeSessionClient(base_client.SessionClient):
+                 'injected_file_content_bytes': 1,
+                 'injected_file_path_bytes': 1,
+                 'ram': 1,
++                'sgx_epc': 1,
+                 'floating_ips': 1,
+                 'instances': 1,
+                 'injected_files': 1,
+@@ -1444,6 +1453,7 @@ class FakeSessionClient(base_client.SessionClient):
+                 'injected_file_content_bytes': 1,
+                 'injected_file_path_bytes': 1,
+                 'ram': 1,
++                'sgx_epc': 1,
+                 'floating_ips': 1,
+                 'instances': 1,
+                 'injected_files': 1,
+@@ -1467,6 +1477,7 @@ class FakeSessionClient(base_client.SessionClient):
+                     'id': 'test',
+                     'metadata_items': 1,
+                     'ram': 1,
++                    'sgx_epc': 1,
+                     'instances': 1,
+                     'cores': 1,
+                     'key_pairs': 1,
+@@ -1481,6 +1492,7 @@ class FakeSessionClient(base_client.SessionClient):
+                     'injected_file_content_bytes': 1,
+                     'injected_file_path_bytes': 1,
+                     'ram': 1,
++                    'sgx_epc': 1,
+                     'instances': 1,
+                     'injected_files': 1,
+                     'cores': 1,
+@@ -1494,6 +1506,7 @@ class FakeSessionClient(base_client.SessionClient):
+                 'injected_file_content_bytes': 1,
+                 'injected_file_path_bytes': 1,
+                 'ram': 1,
++                'sgx_epc': 1,
+                 'floating_ips': 1,
+                 'fixed_ips': -1,
+                 'instances': 1,
+@@ -1511,6 +1524,7 @@ class FakeSessionClient(base_client.SessionClient):
+                 'quota_class_set': {
+                     'metadata_items': 1,
+                     'ram': 1,
++                    'sgx_epc': 1,
+                     'instances': 1,
+                     'cores': 1,
+                     'key_pairs': 1,
+@@ -1524,6 +1538,7 @@ class FakeSessionClient(base_client.SessionClient):
+                     'injected_file_content_bytes': 1,
+                     'injected_file_path_bytes': 1,
+                     'ram': 1,
++                    'sgx_epc': 1,
+                     'instances': 1,
+                     'injected_files': 1,
+                     'cores': 1,
+@@ -1536,6 +1551,7 @@ class FakeSessionClient(base_client.SessionClient):
+                 'injected_file_content_bytes': 1,
+                 'injected_file_path_bytes': 1,
+                 'ram': 1,
++                'sgx_epc': 1,
+                 'floating_ips': 1,
+                 'fixed_ips': -1,
+                 'instances': 1,
+@@ -1554,6 +1570,7 @@ class FakeSessionClient(base_client.SessionClient):
+                 'injected_file_content_bytes': 1,
+                 'injected_file_path_bytes': 1,
+                 'ram': 1,
++                'sgx_epc': 1,
+                 'floating_ips': 1,
+                 'instances': 1,
+                 'injected_files': 1,
+diff --git a/novaclient/tests/unit/v2/test_shell.py b/novaclient/tests/unit/v2/test_shell.py
+index 9f4d084d..956dec7c 100644
+--- a/novaclient/tests/unit/v2/test_shell.py
++++ b/novaclient/tests/unit/v2/test_shell.py
+@@ -4178,8 +4178,17 @@ class ShellTest(utils.TestCase):
+ 
+     def _check_keypair_import(self, expected_key_type=None, extra_args='',
+                               api_version=None):
+-        with mock.patch.object(builtins, 'open',
+-                               mock.mock_open(read_data='FAKE_PUBLIC_KEY')):
++        def my_open(fname, *args, **kwargs):
++
++            if fname in ['test.pub']:
++                return mock.mock_open(
++                    read_data='FAKE_PUBLIC_KEY').return_value
++            else:
++                raise FileNotFoundError
++        mock_opener = mock.mock_open()
++        mock_opener.side_effect = my_open
++
++        with mock.patch.object(builtins, 'open', mock_opener):
+             self.run_command('keypair-add --pub-key test.pub %s test' %
+                              extra_args, api_version=api_version)
+             expected_body = {"keypair": {'public_key': 'FAKE_PUBLIC_KEY',
+diff --git a/novaclient/v2/quota_classes.py b/novaclient/v2/quota_classes.py
+index 917cc9c4..8960418a 100644
+--- a/novaclient/v2/quota_classes.py
++++ b/novaclient/v2/quota_classes.py
+@@ -52,7 +52,7 @@ class QuotaClassSetManager(base.Manager):
+     # specify since the network-related resources are blocked in 2.50.
+     @api_versions.wraps("2.50", "2.56")
+     def update(self, class_name, instances=None, cores=None, ram=None,
+-               metadata_items=None, injected_files=None,
++               sgx_epc=None, metadata_items=None, injected_files=None,
+                injected_file_content_bytes=None, injected_file_path_bytes=None,
+                key_pairs=None, server_groups=None, server_group_members=None):
+         resources = {}
+@@ -62,6 +62,8 @@ class QuotaClassSetManager(base.Manager):
+             resources['cores'] = cores
+         if ram is not None:
+             resources['ram'] = ram
++        if sgx_epc is not None:
++            resources['sgx_epc'] = sgx_epc
+         if metadata_items is not None:
+             resources['metadata_items'] = metadata_items
+         if injected_files is not None:
+@@ -87,8 +89,8 @@ class QuotaClassSetManager(base.Manager):
+     # kwargs are removed.
+     @api_versions.wraps("2.57")
+     def update(self, class_name, instances=None, cores=None, ram=None,
+-               metadata_items=None, key_pairs=None, server_groups=None,
+-               server_group_members=None):
++               sgx_epc=None, metadata_items=None, key_pairs=None,
++               server_groups=None, server_group_members=None):
+         resources = {}
+         if instances is not None:
+             resources['instances'] = instances
+@@ -96,6 +98,8 @@ class QuotaClassSetManager(base.Manager):
+             resources['cores'] = cores
+         if ram is not None:
+             resources['ram'] = ram
++        if sgx_epc is not None:
++            resources['sgx_epc'] = sgx_epc
+         if metadata_items is not None:
+             resources['metadata_items'] = metadata_items
+         if key_pairs is not None:
+diff --git a/novaclient/v2/quotas.py b/novaclient/v2/quotas.py
+index 82249f25..ec916914 100644
+--- a/novaclient/v2/quotas.py
++++ b/novaclient/v2/quotas.py
+@@ -63,7 +63,7 @@ class QuotaSetManager(base.Manager):
+     # injected files related quotas.
+     @api_versions.wraps("2.57")
+     def update(self, tenant_id, user_id=None, force=False,
+-               instances=None, cores=None, ram=None,
++               instances=None, cores=None, ram=None, sgx_epc=None,
+                metadata_items=None, key_pairs=None, server_groups=None,
+                server_group_members=None):
+ 
+@@ -76,6 +76,8 @@ class QuotaSetManager(base.Manager):
+             resources['cores'] = cores
+         if ram is not None:
+             resources['ram'] = ram
++        if sgx_epc is not None:
++            resources['sgx_epc'] = sgx_epc
+         if metadata_items is not None:
+             resources['metadata_items'] = metadata_items
+         if key_pairs is not None:
+diff --git a/novaclient/v2/shell.py b/novaclient/v2/shell.py
+index b95c7d6d..be634841 100644
+--- a/novaclient/v2/shell.py
++++ b/novaclient/v2/shell.py
+@@ -4061,7 +4061,8 @@ _quota_resources = ['instances', 'cores', 'ram',
+                     'injected_files', 'injected_file_content_bytes',
+                     'injected_file_path_bytes', 'key_pairs',
+                     'security_groups', 'security_group_rules',
+-                    'server_groups', 'server_group_members']
++                    'server_groups', 'server_group_members',
++                    'sgx_epc']
+ 
+ 
+ def _quota_show(quotas):
+@@ -4174,6 +4175,12 @@ def do_quota_defaults(cs, args):
+     metavar='<ram>',
+     type=int, default=None,
+     help=_('New value for the "ram" quota.'))
++@utils.arg(
++    '--sgx-epc',
++    metavar='<sgx-epc>',
++    type=int,
++    default=None,
++    help=_('New value for the "sgx-epc" quota.'))
+ @utils.arg(
+     '--floating-ips',
+     metavar='<floating-ips>',
+@@ -4285,6 +4292,12 @@ def do_quota_update(cs, args):
+     metavar='<ram>',
+     type=int, default=None,
+     help=_('New value for the "ram" quota.'))
++@utils.arg(
++    '--sgx-epc',
++    metavar='<sgx-epc>',
++    type=int,
++    default=None,
++    help=_('New value for the "sgx-epc" quota.'))
+ @utils.arg(
+     '--metadata-items',
+     metavar='<metadata-items>',
+@@ -4390,6 +4403,12 @@ def do_quota_class_show(cs, args):
+     metavar='<ram>',
+     type=int, default=None,
+     help=_('New value for the "ram" quota.'))
++@utils.arg(
++    '--sgx-epc',
++    metavar='<sgx-epc>',
++    type=int,
++    default=None,
++    help=_('New value for the "sgx-epc" quota.'))
+ @utils.arg(
+     '--floating-ips',
+     metavar='<floating-ips>',
+@@ -4489,6 +4508,12 @@ def do_quota_class_update(cs, args):
+     metavar='<ram>',
+     type=int, default=None,
+     help=_('New value for the "ram" quota.'))
++@utils.arg(
++    '--sgx-epc',
++    metavar='<sgx-epc>',
++    type=int,
++    default=None,
++    help=_('New value for the "sgx-epc" quota.'))
+ @utils.arg(
+     '--metadata-items',
+     metavar='<metadata-items>',
+-- 
+2.37.1
+
