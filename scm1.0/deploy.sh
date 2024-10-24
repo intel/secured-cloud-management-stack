@@ -25,7 +25,7 @@ BM_IPMI_PASSWORD="123456"
 
 # ******************** SGX DCAP Configuration ********************
 EPC_SIZE="131072"
-API_KEY="d9cafa222a414522a9c4169c07815910"
+API_KEY=""
 USER_PASSWD="pccs1234.."
 ADMIN_PASSWD="pccs1234.."
 
